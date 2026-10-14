@@ -1,0 +1,7 @@
+---
+name: agentgateway-broker
+dependencies:
+- golang-1-linux
+files:
+- agentgateway-broker/*.go
+- agentgateway-broker/go.mod

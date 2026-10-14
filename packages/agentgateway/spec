@@ -1,0 +1,13 @@
+---
+name: agentgateway
+dependencies:
+- rust-1-linux
+files:
+- agentgateway/Cargo.toml
+- agentgateway/Cargo.lock
+- agentgateway/rust-toolchain.toml
+- agentgateway/crates/**/*
+- agentgateway/catalog/**/*
+- agentgateway/tools/report_build_info.sh
+- agentgateway/.cargo/config.toml
+- agentgateway-vendor/**/*

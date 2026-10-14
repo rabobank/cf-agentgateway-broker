@@ -1,0 +1,5 @@
+check process agentgateway-broker
+  with pidfile /var/vcap/sys/run/bpm/agentgateway-broker/broker.pid
+  start program "/var/vcap/jobs/bpm/bin/bpm start agentgateway-broker -p broker"
+  stop program "/var/vcap/jobs/bpm/bin/bpm stop agentgateway-broker -p broker"
+  group vcap

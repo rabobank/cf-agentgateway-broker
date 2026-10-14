@@ -1,0 +1,5 @@
+set -e -x -u
+# Bundle the compilation toolchain runtime rather than assuming it is available
+# on the runtime VM. Build and runtime use the same pinned Noble stemcell.
+mkdir -p "$BOSH_INSTALL_TARGET/lib"
+cp "$(gcc -print-file-name=libgcc_s.so.1)" "$BOSH_INSTALL_TARGET/lib/libgcc_s.so.1"

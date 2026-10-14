@@ -1,0 +1,10 @@
+processes:
+- name: gateway
+  executable: /var/vcap/packages/agentgateway/bin/agentgateway
+  args:
+  - -f
+  - /var/vcap/jobs/agentgateway/config/config.json
+  env:
+    LD_LIBRARY_PATH: /var/vcap/packages/gateway-runtime/lib
+  limits:
+    open_files: 65536

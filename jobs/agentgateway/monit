@@ -1,0 +1,5 @@
+check process agentgateway
+  with pidfile /var/vcap/sys/run/bpm/agentgateway/gateway.pid
+  start program "/var/vcap/jobs/bpm/bin/bpm start agentgateway -p gateway"
+  stop program "/var/vcap/jobs/bpm/bin/bpm stop agentgateway -p gateway"
+  group vcap

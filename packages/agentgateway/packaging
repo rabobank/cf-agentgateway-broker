@@ -1,0 +1,9 @@
+set -e -x -u
+export PATH="/var/vcap/packages/rust-1-linux/bin:$PATH"
+export CARGO_HOME="$BOSH_COMPILE_TARGET/cargo-home"
+export VERSION=main-c0354ea4 GIT_REVISION=c0354ea426b25b4b3df357ba4b6afabcf4309660
+cd agentgateway
+cat ../agentgateway-vendor/config.toml >> .cargo/config.toml
+mkdir -p "$BOSH_INSTALL_TARGET/bin"
+cargo build --frozen --release -p agentgateway-app --bin agentgateway
+cp target/release/agentgateway "$BOSH_INSTALL_TARGET/bin/agentgateway"

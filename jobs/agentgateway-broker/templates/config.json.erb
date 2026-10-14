@@ -1,0 +1,13 @@
+<% require 'json' %>
+<%= JSON.pretty_generate({
+  'listen' => "0.0.0.0:#{p('broker.port')}",
+  'username' => p('broker.username'), 'password' => p('broker.password'),
+  'installation' => p('broker.installation'),
+  'gateway_url' => p('broker.gateway_url'), 'management_url' => p('broker.management_url'),
+  'management_token' => p('broker.management_token'),
+  'ca_file' => '/var/vcap/jobs/agentgateway-broker/config/ca.crt',
+  'certificate' => '/var/vcap/jobs/agentgateway-broker/config/tls.crt',
+  'private_key' => '/var/vcap/jobs/agentgateway-broker/config/tls.key',
+  'service_id' => p('broker.service_id'), 'plan_id' => p('broker.plan_id'),
+  'models' => p('broker.models'), 'budget' => p('broker.budget'), 'window' => p('broker.window')
+}) %>

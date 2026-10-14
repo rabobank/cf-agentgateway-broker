@@ -1,0 +1,18 @@
+# OpenCode provider "atlas": DeepSeek 4 on the DGX Spark.
+model_aliases: [deepseek-v4-flash]
+usd_allowance: 10
+budget_window: 24h
+gateway_models:
+- name: deepseek-v4-flash
+  provider: openAI
+  params:
+    model: deepseek-v4-flash
+    baseUrl: http://192.168.2.148:8000/v1
+# Operator-defined accounting rates for self-hosted inference, USD/million tokens.
+# These are internal allowance rates, not a provider billing quote.
+model_catalog:
+  providers:
+    openai:
+      models:
+        deepseek-v4-flash:
+          rates: {input: '1', output: '1'}

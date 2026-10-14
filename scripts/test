@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pushd src/agentgateway-broker >/dev/null
+go test -race ./...
+go vet ./...
+popd >/dev/null
+bundle exec rspec spec

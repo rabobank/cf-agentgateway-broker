@@ -1,0 +1,8 @@
+set -e -x -u
+export GOROOT=/var/vcap/packages/golang-1-linux
+export PATH="$GOROOT/bin:$PATH"
+export GOTOOLCHAIN=local CGO_ENABLED=0 GOPROXY=off
+export GOCACHE="$BOSH_COMPILE_TARGET/go-cache"
+cd agentgateway-broker
+mkdir -p "$BOSH_INSTALL_TARGET/bin"
+go build -trimpath -o "$BOSH_INSTALL_TARGET/bin/broker" .
