@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
+  "packages": ["go@1.26", "rustup@latest", "gcc@latest", "gnumake@latest", "cmake@latest", "pkg-config@latest", "git-lfs@latest", "postgresql@18", "ruby@3.3", "bundler@latest"],
+  "env": {"GOTMPDIR": "/dev/shm"},
+  "shell": {
+    "init_hook": [
+      "echo 'Welcome to devbox!' > /dev/null"
+    ],
+    "scripts": {
+      "test": "bash scripts/test",
+      "build": "bash scripts/build",
+      "vendor": "bash scripts/vendor"
+    }
+  }
+}

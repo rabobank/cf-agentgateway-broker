@@ -1,0 +1,12 @@
+---
+agentgateway:
+  repository: https://github.com/agentgateway/agentgateway
+  revision: c0354ea426b25b4b3df357ba4b6afabcf4309660
+rust:
+  repository: https://github.com/cloudfoundry/bosh-package-rust-release
+  revision: 1b8f1ec1f9e01093441d336fe1e7e8a727744f70
+  package: rust-1-linux
+golang:
+  repository: https://github.com/cloudfoundry/bosh-package-golang-release
+  revision: 6ac267abbd74bf5acdf014d6b6122b8be4a3a895
+  package: golang-1-linux

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pushd src/agentgateway-broker >/dev/null
+CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o broker .
+popd >/dev/null
+pushd src/agentgateway >/dev/null
+export VERSION=main-c0354ea4 GIT_REVISION=c0354ea426b25b4b3df357ba4b6afabcf4309660
+cargo build --locked --release -p agentgateway-app --bin agentgateway
+popd >/dev/null

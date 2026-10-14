@@ -1,0 +1,17 @@
+.devbox/
+bosh.env
+config/private.yml
+.dev_builds/
+dev_releases/
+blobs/*
+!blobs/.gitkeep
+# Temporary local blobstore; migrate before publishing blob objects.
+/final_blobs/
+src/agentgateway-broker/vendor/
+src/agentgateway-broker/broker
+src/agentgateway-vendor/
+test/.work/
+*.tgz
+.bundle/
+vendor/bundle/
+nix-*/

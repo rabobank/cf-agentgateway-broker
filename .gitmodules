@@ -1,0 +1,3 @@
+[submodule "src/agentgateway"]
+	path = src/agentgateway
+	url = https://github.com/agentgateway/agentgateway
