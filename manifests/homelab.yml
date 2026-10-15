@@ -74,6 +74,7 @@ instance_groups:
         gateway_url: https://gateway.agentgateway.internal:8443/v1
         management_url: https://gateway.agentgateway.internal:8444
         management_token: ((management_token))
+        inference_ca: ((gateway_tls.ca))
         password: ((broker_password))
         models: ((model_aliases))
         budget: ((usd_allowance))

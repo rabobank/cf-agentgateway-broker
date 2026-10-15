@@ -1,19 +1,19 @@
 """Exercise bound credentials from the actual OpenCode CF container."""
-import base64
 import pathlib
 import shlex
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ca = (ROOT / 'test/.work/gateway-ca.crt').read_bytes()
-encoded = base64.b64encode(ca).decode()
 ruby = r'''
 require 'json'; require 'net/http'; require 'openssl'
 services = JSON.parse(ENV.fetch('VCAP_SERVICES'))
-credentials = services.fetch('agentgateway').find { |s| s['name'] == 'opencode-agentgateway' }.fetch('credentials')
+credentials = services.fetch('agentgateway').first.fetch('credentials')
 store = OpenSSL::X509::Store.new
 store.set_default_paths
-store.add_file('/tmp/agentgateway-ca.crt')
+trusted_ca = credentials.fetch('trusted_ca')
+certificates = trusted_ca.scan(/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/m)
+raise 'binding has no CA certificate' if certificates.empty?
+certificates.each { |pem| store.add_cert(OpenSSL::X509::Certificate.new(pem)) }
 uri = URI(credentials.fetch('url') + '/models')
 client = Net::HTTP.new(uri.host, uri.port)
 client.use_ssl = true; client.cert_store = store; client.read_timeout = 180
@@ -44,7 +44,7 @@ uri = URI(credentials.fetch('url') + '/chat/completions')
   raise 'stream incomplete' if stream && !response.body.include?('[DONE]')
 end
 '''
-command = "printf %s " + shlex.quote(encoded) + " | base64 -d > /tmp/agentgateway-ca.crt; /home/vcap/deps/0/ruby/bin/ruby -e " + shlex.quote(ruby)
+command = "/home/vcap/deps/0/ruby/bin/ruby -e " + shlex.quote(ruby)
 result = subprocess.run(['cf', 'ssh', 'opencode-demo', '-c', command], cwd=ROOT, capture_output=True, text=True, timeout=420)
 print(result.stdout)
 print(result.stderr)

@@ -39,6 +39,7 @@ type Config struct {
 	ManagementURL   string      `json:"management_url"`
 	ManagementToken string      `json:"management_token"`
 	CAFile          string      `json:"ca_file"`
+	TrustedCAFile   string      `json:"trusted_ca_file"`
 	Certificate     string      `json:"certificate"`
 	PrivateKey      string      `json:"private_key"`
 	ServiceID       string      `json:"service_id"`
@@ -78,8 +79,9 @@ type Request struct {
 	BindResource     map[string]any `json:"bind_resource"`
 }
 type Broker struct {
-	cfg    Config
-	client *http.Client
+	cfg       Config
+	client    *http.Client
+	trustedCA string
 }
 type apiError struct {
 	status  int
@@ -140,7 +142,18 @@ func newBroker(c Config) (*Broker, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
-	return &Broker{c, &http.Client{Timeout: 15 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	var trustedCA string
+	if c.TrustedCAFile != "" {
+		pem, err := os.ReadFile(c.TrustedCAFile)
+		if err != nil {
+			return nil, errors.New("cannot read inference trust CA")
+		}
+		if !x509.NewCertPool().AppendCertsFromPEM(pem) {
+			return nil, errors.New("invalid inference trust CA")
+		}
+		trustedCA = string(pem)
+	}
+	return &Broker{cfg: c, client: &http.Client{Timeout: 15 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, trustedCA: trustedCA}, nil
 }
 func (b *Broker) gateway(ctx context.Context, method, path string, body any, out any) error {
 	var reader io.Reader
@@ -312,7 +325,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 503, "instance credential is not recoverable")
 			return
 		}
-		write(w, 201, map[string]any{"credentials": map[string]string{"url": b.cfg.GatewayURL, "api_key": existing.Value.Key}})
+		write(w, 201, map[string]any{"credentials": map[string]string{"url": b.cfg.GatewayURL, "api_key": existing.Value.Key, "trusted_ca": b.trustedCA}})
 		return
 	}
 	if r.Method == http.MethodDelete {

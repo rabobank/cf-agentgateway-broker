@@ -8,6 +8,7 @@ templates:
   certificate.erb: config/tls.crt
   private-key.erb: config/tls.key
   ca.erb: config/ca.crt
+  inference-ca.erb: config/inference-ca.crt
 properties:
   broker.port:
     description: OSB HTTPS port
@@ -46,3 +47,5 @@ properties:
     description: Broker private key PEM
   broker.tls.ca:
     description: Management listener trust CA PEM
+  broker.inference_ca:
+    description: Inference listener trust CA PEM returned in binding and service-key credentials

@@ -81,17 +81,23 @@ recreating that VM. Bind `manifests/cf-egress.json` as a running ASG to the app'
 space; it allows private gateway inference on port 8443. Allow dynamic ASG
 propagation time or restart the app.
 
-The homelab broker is registered, service `opencode-agentgateway` is bound to
-`opencode-demo` in `poc/demo`, and the app was restarted. Run
+The homelab broker is registered, service `agentgateway-opencode` is bound to
+`opencode-demo` in the recreated `poc/demo` space. Run
 `python scripts/app-acceptance.py` to test with its VCAP_SERVICES credentials and
-verified TLS inside the Diego container. This client installs the public CA into
-an ephemeral file for the test; configure the OpenCode process's trust/provider
-settings separately when integrating its interactive sessions.
+verified TLS inside the Diego container. The acceptance client consumes
+`trusted_ca` directly from the binding, without external CA files or environment
+workarounds. Configure the OpenCode provider to consume that same field.
+
+Refresh existing bindings using `cf unbind-service` followed by `cf bind-service`;
+the shared instance key survives unbind. `scripts/refresh-binding.py` verifies key
+preservation and CA validity without printing credentials. Coordinate app restart
+with its owner: rebind does not update a running process's VCAP_SERVICES.
 
 ## CF semantics
 
 - One random API key per service instance, stored in gateway resources.
-- All app bindings and service keys receive `{url, api_key}` for that key.
+- All app bindings and service keys receive `{url, api_key, trusted_ca}` for that key.
+  `trusted_ca` supplies the inference CA PEM; clients must use it for TLS verification.
 - Provision retries find metadata labels and compare request fingerprints.
 - Relies on CAPI serializing same-instance lifecycle operations; no detached worker.
 - Unbind leaves the shared key valid; deprovision deletes it.

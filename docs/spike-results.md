@@ -56,9 +56,27 @@ Spark connectivity is being investigated by a separate session.
 - Temporary service/key create/delete lifecycle succeeded; demo binding retained.
 
 The acceptance client runs within the actual OpenCode app container and consumes
-VCAP_SERVICES. It does not yet configure the interactive OpenCode provider itself.
-The test's CA trust is explicit; permanent CF platform/app trust configuration is
-an operator follow-up. Scale-out and fault-injection checks remain separate gates.
+VCAP_SERVICES. Scale-out and fault-injection checks remain separate gates.
+
+## Binding-provided TLS trust
+
+- Broker release `0+dev.6` deployed successfully (task 33556).
+- Binding and service-key credentials include `trusted_ca`, the inference CA PEM
+  bundle. Management CA configuration is separate from inference trust inputs.
+- Rebound `agentgateway-opencode` to `opencode-demo` in recreated `poc/demo`
+  (space `951bb3f5-4c9c-4be6-ab4c-fd3fbfba34b3`). Verified the instance API key and
+  URL were preserved, and the returned CA was parseable, currently valid and
+  usable as TLS trust. No app restart was performed by the broker session.
+- A temporary real service key returned identical credentials including trusted_ca;
+  the verification key was deleted after checking.
+- The buildpack session removed manual CA environment/file workarounds, restaged
+  the app with binding-only trust, and verified real OpenCode chat returned
+  `gateway works` without TLS errors. Its only provider/model is
+  `agentgateway/deepseek-v4-flash`.
+- Demo setup now binds the inference ASG when recreating the demo space.
+- `scripts/app-acceptance.py` consumes CA certificates directly from binding
+  credentials; `scripts/refresh-binding.py` refreshes/verifies bindings without
+  printing credentials or restarting the app.
 
 - Noble offline compilation and runtime-library closure. The local Nix executable
   links Nix glibc/libgcc and is not used as the BOSH deployment binary.

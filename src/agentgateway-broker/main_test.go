@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +53,13 @@ func fixture(t *testing.T) (*Broker, *map[string]Resource) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	b, err := newBroker(Config{Listen: ":8080", Username: "broker", Password: "secret", Installation: "test", GatewayURL: "https://gateway.test/v1", ManagementURL: server.URL, ServiceID: "service", PlanID: "plan", Models: []string{"model"}, Budget: json.Number("1.25"), Window: "24h"})
+	certServer := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(certServer.Close)
+	caFile := filepath.Join(t.TempDir(), "inference-ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certServer.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newBroker(Config{Listen: ":8080", Username: "broker", Password: "secret", Installation: "test", GatewayURL: "https://gateway.test/v1", ManagementURL: server.URL, TrustedCAFile: caFile, ServiceID: "service", PlanID: "plan", Models: []string{"model"}, Budget: json.Number("1.25"), Window: "24h"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +101,19 @@ func TestLifecycleAndRestartRecovery(t *testing.T) {
 	if !strings.Contains(first.Body.String(), "sk-cf-") {
 		t.Fatal("credential missing")
 	}
+	var response struct {
+		Credentials map[string]string `json:"credentials"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	expectedCA, err := os.ReadFile(b.cfg.TrustedCAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Credentials["trusted_ca"] != string(expectedCA) {
+		t.Fatal("binding must include the complete inference CA PEM")
+	}
 	if w := call(b, "DELETE", "/v2/service_instances/instance/service_bindings/app?service_id=service&plan_id=plan", ""); w.Code != 200 {
 		t.Fatal(w.Code)
 	}
@@ -106,6 +128,19 @@ func TestLifecycleAndRestartRecovery(t *testing.T) {
 	}
 	if len(*resources) != 0 {
 		t.Fatal("deprovision left key")
+	}
+}
+
+func TestInvalidInferenceCARejected(t *testing.T) {
+	b, _ := fixture(t)
+	path := filepath.Join(t.TempDir(), "invalid.pem")
+	if err := os.WriteFile(path, []byte("not a certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := b.cfg
+	cfg.TrustedCAFile = path
+	if _, err := newBroker(cfg); err == nil {
+		t.Fatal("invalid inference CA accepted")
 	}
 }
 func TestProvisionConflictAndOwnership(t *testing.T) {

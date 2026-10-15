@@ -6,7 +6,8 @@ CF Cloud Controller calls the stateless Go OSB broker over HTTPS/Basic auth.
 The broker reads/writes private agentgateway management API resources. Gateway
 resources in shared PostgreSQL are authoritative for instances and credentials.
 
-CF applications receive `{url, api_key}` and call the BOSH DNS inference alias.
+CF applications receive `{url, api_key, trusted_ca}` and call the BOSH DNS inference alias.
+`trusted_ca` is the inference listener's PEM CA bundle, for client TLS trust.
 Multiple source-built agentgateway replicas authenticate the shared instance key,
 restrict models and account for USD usage. No UAA, ext_authz bridge, or load balancer.
 

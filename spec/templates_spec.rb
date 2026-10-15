@@ -9,6 +9,7 @@ RSpec.describe 'release templates' do
     properties = {'broker' => {
       'password' => "quote\"\nsecret", 'gateway_url' => 'https://gateway.test/v1',
       'management_url' => 'https://gateway.test:8444', 'management_token' => 'token',
+      'inference_ca' => 'inference-ca',
       'models' => ['test-model'], 'tls' => {'certificate' => 'cert', 'private_key' => 'key', 'ca' => 'ca'}
     }}
     rendered = release.job('agentgateway-broker').template('config/config.json').render(properties)
@@ -16,6 +17,8 @@ RSpec.describe 'release templates' do
     expect(config['password']).to eq("quote\"\nsecret")
     expect(config['budget']).to eq(10)
     expect(config['management_token']).to eq('token')
+    expect(config['trusted_ca_file']).to eq('/var/vcap/jobs/agentgateway-broker/config/inference-ca.crt')
+    expect(release.job('agentgateway-broker').template('config/inference-ca.crt').render(properties).strip).to eq('inference-ca')
   end
 
   it 'separates tenant and management authentication and encodes database credentials' do
