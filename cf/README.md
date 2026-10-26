@@ -55,6 +55,11 @@ Refresh app environments by restarting/restaging after coordinating consumers.
 - Restart replicas and verify credentials/usage survive while PostgreSQL remains up.
 - Public inference must not expose `/api/config` or raw admin/debug endpoints.
 
+`devbox run -- python scripts/spike.py` runs two local gateways, PostgreSQL and a
+mock provider against the CF build artifacts. It requires a compatible Linux
+runtime; on NixOS, set `GATEWAY_BINARY` to a locally built Nix-compatible gateway
+or run the harness in a compatible container. Go tests run directly in Devbox.
+
 The operator allowance catalog uses $1/million input and output tokens for
 self-hosted DeepSeek, not a provider billing quote. Replica accounting retains
 the existing post-response/eventual semantics.

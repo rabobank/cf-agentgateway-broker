@@ -1,9 +1,0 @@
-processes:
-- name: broker
-  executable: /var/vcap/packages/agentgateway-broker/bin/broker
-  args:
-  - -config
-  - /var/vcap/jobs/agentgateway-broker/config/config.json
-  capabilities: []
-  limits:
-    open_files: 65536

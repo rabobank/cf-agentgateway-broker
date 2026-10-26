@@ -1,19 +1,17 @@
 .devbox/
 bosh.env
-config/private.yml
-.dev_builds/
-dev_releases/
-blobs/*
-!blobs/.gitkeep
-# Temporary local blobstore; migrate before publishing blob objects.
+# Ignore legacy local blob/build caches retained from the previous deployment.
+/config/private.yml
+/.dev_builds/
+/.final_builds/
+/dev_releases/
+/blobs/
 /final_blobs/
 src/agentgateway-broker/vendor/
 src/agentgateway-broker/broker
 src/agentgateway-vendor/
 test/.work/
 *.tgz
-.bundle/
-vendor/bundle/
 nix-*/
 /cf/dist/
 /cf/local-vars.yml

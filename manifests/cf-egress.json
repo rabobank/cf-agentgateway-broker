@@ -1,3 +1,0 @@
-[
-  {"protocol": "tcp", "destination": "10.246.0.0/16", "ports": "8443", "description": "BOSH DNS-selected agentgateway inference replicas"}
-]

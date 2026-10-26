@@ -1,5 +1,6 @@
 """Two real gateways + PostgreSQL + deterministic OpenAI fixture; no provider spend."""
 import json
+import os
 import base64
 import pathlib
 import socket
@@ -92,7 +93,9 @@ def run(*args):
 def start_gateway(index, config):
     log = (WORK / f'gateway-{index}.log').open('a')
     logs.append(log)
-    process = subprocess.Popen([str(ROOT / 'src/agentgateway/target/release/agentgateway'), '-f', str(config)], stdout=log, stderr=subprocess.STDOUT)
+    env = dict(os.environ, LD_LIBRARY_PATH=str(ROOT / 'cf/dist/gateway/lib'))
+    binary = os.environ.get('GATEWAY_BINARY', str(ROOT / 'cf/dist/gateway/bin/agentgateway'))
+    process = subprocess.Popen([binary, '-f', str(config)], stdout=log, stderr=subprocess.STDOUT, env=env)
     processes.append(process)
     return process
 
@@ -153,7 +156,7 @@ try:
     config_path = WORK / 'broker.json'
     config_path.write_text(json.dumps(broker_config))
     broker_log = (WORK / 'broker.log').open('w'); logs.append(broker_log)
-    process = subprocess.Popen([str(ROOT / 'src/agentgateway-broker/broker'), '-config', str(config_path)], stdout=broker_log, stderr=subprocess.STDOUT)
+    process = subprocess.Popen([str(ROOT / 'cf/dist/broker/bin/broker'), '-config', str(config_path)], stdout=broker_log, stderr=subprocess.STDOUT)
     processes.append(process)
     broker_url = f'http://127.0.0.1:{broker_port}'
     eventually(lambda: request(broker_url + '/ready')[0] == 200, 'real broker readiness against gateway API')
