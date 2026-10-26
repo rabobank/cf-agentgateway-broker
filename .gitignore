@@ -15,3 +15,7 @@ test/.work/
 .bundle/
 vendor/bundle/
 nix-*/
+/cf/dist/
+/cf/local-vars.yml
+/src/cf-build-target/
+/src/cf-build-target-lowmem/
