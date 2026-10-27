@@ -1,6 +1,44 @@
 {
   "lockfile_version": "1",
   "packages": {
+    "cargo@1.98.1": {
+      "last_modified": "2026-10-02T22:55:44Z",
+      "resolved": "github:NixOS/nixpkgs/55ba7f49ef2962b42cbd126522b7df5f95037679#cargo",
+      "source": "devbox-search",
+      "version": "1.98.1",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/z76zwygvlbbapfasr22i7xxrsi9w2wm6-cargo-1.98.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/z76zwygvlbbapfasr22i7xxrsi9w2wm6-cargo-1.98.1"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/4xg2np6a2m3ff0camgca44rb5h8g71nl-cargo-1.98.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/4xg2np6a2m3ff0camgca44rb5h8g71nl-cargo-1.98.1"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/gmgfpzc0w2pgby0lmq9r88m39albiyfw-cargo-1.98.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/gmgfpzc0w2pgby0lmq9r88m39albiyfw-cargo-1.98.1"
+        }
+      }
+    },
     "curl@latest": {
       "last_modified": "2025-12-05T15:03:55Z",
       "resolved": "github:NixOS/nixpkgs/a672be65651c80d3f592a89b3945466584a22069#curl",
@@ -427,55 +465,6 @@
             }
           ],
           "store_path": "/nix/store/h9aczmrkpcmm9z47648m5n9sg67vi5gw-postgresql-18.6"
-        }
-      }
-    },
-    "rustup@latest": {
-      "last_modified": "2026-08-27T07:16:00Z",
-      "plugin_version": "0.0.1",
-      "resolved": "github:NixOS/nixpkgs/c27cdad491a991b11ed731760aa2ef8db0cb0410#rustup",
-      "source": "devbox-search",
-      "version": "1.29.0",
-      "systems": {
-        "aarch64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/1x8jzaxfv0bak76xkr5li258cal51n99-rustup-1.29.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/1x8jzaxfv0bak76xkr5li258cal51n99-rustup-1.29.0"
-        },
-        "aarch64-linux": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/iwq43bwclkay14x5x5bfj955ffphaqff-rustup-1.29.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/iwq43bwclkay14x5x5bfj955ffphaqff-rustup-1.29.0"
-        },
-        "x86_64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/lvm2155pfw1b3a9g8cij5g7vx2dk4v9f-rustup-1.29.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/lvm2155pfw1b3a9g8cij5g7vx2dk4v9f-rustup-1.29.0"
-        },
-        "x86_64-linux": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/cdgc1rh9s22n5i5cgr96vda0pjx1xg3x-rustup-1.29.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/cdgc1rh9s22n5i5cgr96vda0pjx1xg3x-rustup-1.29.0"
         }
       }
     },

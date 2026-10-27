@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
-  "packages": ["go@1.26", "rustup@latest", "postgresql@18", "jq@latest", "curl@latest", "socat@latest"],
+  "packages": ["go@1.26", "cargo@1.98.1", "postgresql@18", "jq@latest", "curl@latest", "socat@latest"],
   "env": {"GOTMPDIR": "/dev/shm"},
   "shell": {
     "scripts": {

@@ -18,13 +18,13 @@ Unbind preserves the key; deprovision revokes it.
 
 1. `git submodule update --init --recursive`
 2. `devbox install`
-3. `devbox run -- rustup toolchain install 1.99.0 --profile minimal`
-4. `devbox run vendor`
-5. `devbox run test`
-6. `devbox run build` (requires Docker)
+3. `devbox run vendor`
+4. `devbox run test`
+5. `devbox run build` (requires Docker)
 
-The source and Docker build image are pinned. Cargo dependencies are vendored
-locally; build artifacts and deployment secrets are ignored.
+The source, Cargo package used for vendoring, and Docker build image are pinned.
+Cargo dependencies are vendored locally; build artifacts and deployment secrets
+are ignored.
 
 Run `devbox run dev` after building to exercise two local gateways, PostgreSQL,
 and a mock provider without paid inference calls. It checks streaming, shared
