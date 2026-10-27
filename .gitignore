@@ -1,4 +1,5 @@
 .devbox/
+.venv/
 bosh.env
 # Ignore legacy local blob/build caches retained from the previous deployment.
 /config/private.yml

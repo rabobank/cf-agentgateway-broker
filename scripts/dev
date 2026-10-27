@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# Local two-replica integration environment with a deterministic OpenAI fixture.
+set -euo pipefail
+
+# socat starts one isolated handler per HTTP connection. Never contact a provider.
+if [[ ${1:-} == --provider ]]; then
+  IFS= read -r request_line || exit 1
+  length=0 authorization=
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    [[ -n "$line" ]] || break
+    case "${line,,}" in
+      content-length:*) length=${line#*:}; length=${length//[[:space:]]/} ;;
+      authorization:*) authorization=${line#*: }; ;;
+    esac
+  done
+  [[ "$length" =~ ^[0-9]+$ ]] && (( length <= 1048576 )) || exit 1
+  body=
+  if (( length > 0 )); then IFS= read -r -N "$length" body || exit 1; fi
+  if [[ "$authorization" != 'Bearer provider-fixture' ]]; then
+    printf 'HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+    exit 0
+  fi
+  if jq -e '.stream == true' <<<"$body" >/dev/null; then
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n'
+    printf 'data: %s\n\n' \
+      '{"id":"fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}' \
+      '{"id":"fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}' \
+      '[DONE]'
+  else
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n'
+    printf '%s' '{"id":"fixture","object":"chat.completion","created":1,"model":"fixture-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+  fi
+  exit 0
+fi
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+work=$(mktemp -d "${TMPDIR:-/tmp}/agentgateway-dev.XXXXXXXX")
+gateway=${GATEWAY_BINARY:-$root/cf/dist/gateway/bin/agentgateway}
+broker=$root/cf/dist/broker/bin/broker
+base=${DEV_PORT_BASE:-$((20000 + RANDOM % 20000))}
+[[ "$base" =~ ^[0-9]+$ ]] && (( base > 1024 && base < 65520 )) || { printf 'Invalid DEV_PORT_BASE\n' >&2; exit 1; }
+for tool in jq curl socat initdb pg_ctl createdb; do
+  command -v "$tool" >/dev/null || { printf 'Missing dependency: %s\n' "$tool" >&2; exit 1; }
+done
+for binary in "$gateway" "$broker"; do
+  [[ -x "$binary" ]] || { printf 'Build first: missing executable %s\n' "$binary" >&2; exit 1; }
+done
+pids=() pg_started=false
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  for pid in "${pids[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  for pid in "${pids[@]}"; do
+    # Bound shutdown time even if a process does not respond to SIGTERM.
+    for ((attempt=0; attempt<100; attempt++)); do kill -0 "$pid" 2>/dev/null || break; sleep .1; done
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  if "$pg_started"; then pg_ctl -D "$work/postgres" -m fast -w stop >/dev/null; fi
+  printf 'Development logs/configuration: %s\n' "$work"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+printf 'Development environment: %s (ports %s–%s)\n' "$work" "$base" "$((base+12))"
+initdb -D "$work/postgres" -A trust -U postgres >"$work/initdb.log" 2>&1
+pg_ctl -D "$work/postgres" -l "$work/postgres.log" -o "-p $base -h 127.0.0.1 -k $work" -w start >/dev/null
+pg_started=true
+createdb -h 127.0.0.1 -p "$base" -U postgres gateway_dev
+# A wrapper preserves the checkout path through socat's EXEC argument parser.
+export DEV_SCRIPT="$root/scripts/dev"
+printf '%s\n' '#!/usr/bin/env bash' 'exec bash "$DEV_SCRIPT" --provider' >"$work/provider"
+chmod +x "$work/provider"
+socat "TCP4-LISTEN:$((base+1)),bind=127.0.0.1,reuseaddr,fork" "EXEC:$work/provider" >"$work/provider.log" 2>&1 &
+pids+=("$!")
+jq -n '{providers:{openai:{models:{"fixture-model":{rates:{input:"1000000",output:"1000000"}}}}}}' >"$work/catalog.json"
+inference=() management=() gateway_pids=()
+start_gateway() {
+  local index=$1
+  LD_LIBRARY_PATH="$root/cf/dist/gateway/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$gateway" -f "$work/gateway-$index.json" >>"$work/gateway-$index.log" 2>&1 &
+  gateway_pids[index]=$!; pids+=("$!")
+}
+request() {
+  local url=$1 method=${2:-GET} body=${3:-} key=${4:-} auth=${5:-bearer}
+  local args=(--silent --show-error --noproxy '*' --max-time 10 -o "$work/response" -w '%{http_code}' -X "$method")
+  if [[ "$auth" == broker ]]; then
+    args+=(-u broker:broker-fixture -H 'X-Broker-API-Version: 2.16')
+  elif [[ -n "$key" ]]; then args+=(-H "Authorization: Bearer $key"); fi
+  if [[ -n "$body" ]]; then args+=(-H 'Content-Type: application/json' --data-binary "$body"); fi
+  status=$(curl "${args[@]}" "$url" 2>"$work/request-error.log") || status=000
+}
+expect() {
+  local wanted=$1; shift
+  request "$@"
+  if [[ "$status" != "$wanted" ]]; then
+    printf 'Expected HTTP %s, received %s: %s\nSee %s\n' "$wanted" "$status" "$1" "$work" >&2
+    exit 1
+  fi
+}
+eventually() {
+  local description=$1 wanted=$2; shift 2
+  local deadline=$((SECONDS+30))
+  while (( SECONDS < deadline )); do
+    request "$@"
+    if [[ "$status" == "$wanted" ]]; then printf 'PASS: %s\n' "$description"; return; fi
+    sleep .25
+  done
+  printf 'Failed: %s (last HTTP %s); see %s\n' "$description" "$status" "$work" >&2
+  exit 1
+}
+for index in 0 1; do
+  port=$((base+2+index*5))
+  inference[index]="http://127.0.0.1:$port"
+  management[index]="http://127.0.0.1:$((port+1))"
+  jq -n --argjson port "$port" --arg catalog "$work/catalog.json" \
+    --arg db "postgres://postgres@127.0.0.1:$base/gateway_dev?sslmode=disable" \
+    --arg provider "http://127.0.0.1:$((base+1))/v1" '{
+      config:{adminAddr:("127.0.0.1:"+(($port+2)|tostring)),readinessAddr:("127.0.0.1:"+(($port+3)|tostring)),statsAddr:("127.0.0.1:"+(($port+4)|tostring)),storage:{mode:"hybrid"},database:{url:$db},modelCatalog:[{file:$catalog}]},
+      gateways:{inference:{port:$port,bindAddress:"127.0.0.1"},management:{port:($port+1),bindAddress:"127.0.0.1"}},
+      llm:{gateways:["inference"],models:[{name:"fixture-model",provider:"openAI",params:{model:"fixture-model",apiKey:"provider-fixture",baseUrl:$provider}}],policies:{apiKey:{mode:"strict",keys:[]}}},
+      ui:{gateways:["management"],policies:{apiKey:{mode:"strict",keys:[{key:"management-fixture"}]}}}
+    }' >"$work/gateway-$index.json"
+  start_gateway "$index"
+  eventually "replica $index management API without UI assets" 200 "${management[index]}/api/runtime" GET '' management-fixture
+done
+expect 401 "${management[0]}/api/config/resources/llm.apiKey"
+key='sk-shared-fixture'
+resource=$(jq -n --arg key "$key" '{resources:[{value:{key:$key,metadata:{name:"shared-fixture","cf.agentgateway-broker/instance":"instance"},allowedModels:["fixture-model"],budgets:[{name:"shared",limit:{unit:"USD",amount:3},window:{rolling:"24h"},onBudgetExceeded:"Block"}]}}]}')
+expect 200 "${management[0]}/api/config/resources/llm.apiKey" PUT "$resource" management-fixture
+id=$(jq -er '.resources[0].id' "$work/response")
+jq -e --arg key "$key" '.resources[0].value | .key == $key and .metadata["cf.agentgateway-broker/instance"] == "instance"' "$work/response" >/dev/null
+for index in 0 1; do eventually "key active on replica $index" 200 "${inference[index]}/v1/models" GET '' "$key"; done
+chat='{"model":"fixture-model","messages":[{"role":"user","content":"test"}]}'
+stream=$(jq '. + {stream:true,stream_options:{include_usage:true}}' <<<"$chat")
+expect 200 "${inference[0]}/v1/chat/completions" POST "$chat" "$key"
+jq -e '.choices[0].message.content == "ok"' "$work/response" >/dev/null
+expect 200 "${inference[1]}/v1/chat/completions" POST "$stream" "$key"
+[[ $(<"$work/response") == *'[DONE]'* ]] || { printf 'Incomplete SSE response\n' >&2; exit 1; }
+printf 'PASS: chat and SSE with provider-only upstream credential\n'
+for index in 0 1; do eventually "shared USD exhaustion reaches replica $index" 429 "${inference[index]}/v1/chat/completions" POST "$chat" "$key"; done
+kill -TERM "${gateway_pids[1]}"; wait "${gateway_pids[1]}"
+start_gateway 1
+eventually 'restart retains budget usage' 429 "${inference[1]}/v1/chat/completions" POST "$chat" "$key"
+expect 200 "${management[0]}/api/config/resources/llm.apiKey/$id" DELETE '' management-fixture
+for index in 0 1; do eventually "deletion revokes replica $index" 401 "${inference[index]}/v1/models" GET '' "$key"; done
+broker_url="http://127.0.0.1:$((base+12))"
+jq -n --arg listen "127.0.0.1:$((base+12))" --arg gateway "${inference[0]}/v1" --arg management "${management[0]}" '{listen:$listen,username:"broker",password:"broker-fixture",installation:"dev",gateway_url:$gateway,management_url:$management,management_token:"management-fixture",service_id:"service",plan_id:"plan",models:["fixture-model"],budget:100,window:"24h"}' >"$work/broker.json"
+"$broker" -config "$work/broker.json" >"$work/broker.log" 2>&1 & pids+=("$!")
+eventually 'broker readiness against gateway API' 200 "$broker_url/ready"
+instance="$broker_url/v2/service_instances/dev-instance"
+provision='{"service_id":"service","plan_id":"plan","organization_guid":"org","space_guid":"space"}'
+expect 201 "$instance" PUT "$provision" '' broker
+expect 200 "$instance" PUT "$provision" '' broker
+credentials=()
+for binding in app service-key; do
+  expect 201 "$instance/service_bindings/$binding" PUT '{"service_id":"service","plan_id":"plan"}' '' broker
+  credentials+=("$(jq -cS '.credentials' "$work/response")")
+done
+[[ ${credentials[0]} == "${credentials[1]}" ]] || { printf 'Binding credentials differ\n' >&2; exit 1; }
+key=$(jq -er '.api_key' <<<"${credentials[0]}")
+for index in 0 1; do eventually "OSB-created key active on replica $index" 200 "${inference[index]}/v1/models" GET '' "$key"; done
+expect 200 "$instance/service_bindings/app?service_id=service&plan_id=plan" DELETE '' '' broker
+expect 200 "${inference[0]}/v1/models" GET '' "$key"
+expect 200 "$instance?service_id=service&plan_id=plan" DELETE '' '' broker
+for index in 0 1; do eventually "OSB deprovision revokes replica $index" 401 "${inference[index]}/v1/models" GET '' "$key"; done
+printf 'PASS: OSB lifecycle, retries and shared binding/service-key credentials\nDEV CHECKS PASSED\n'

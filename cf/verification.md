@@ -1,5 +1,10 @@
 # CF migration verification — 2026-10-26
 
+This is a historical record of one local lab validation, not a deployment guide
+or a set of requirements for other foundations. The ephemeral plan, accepted state
+loss, migration from BOSH, addresses and consumer names apply only to that lab.
+For deployment instructions, see [Deploying to Cloud Foundry](README.md).
+
 ## Running topology
 
 - `poc/demo`: agentgateway 2/2, broker 1/1, both binary buildpack on cflinuxfs5.
@@ -43,7 +48,7 @@
 ## Real-provider acceptance
 
 Spark was temporarily offline while another session evaluated Atlas. After that
-session restored DeepSeek, `scripts/app-acceptance.py` passed from opencode-demo:
+session restored DeepSeek, the in-container acceptance check passed from opencode-demo:
 models, non-streaming chat and SSE all returned 200 over verified TLS using only
 the binding's issuer CA. Response content was `gateway works`.
 

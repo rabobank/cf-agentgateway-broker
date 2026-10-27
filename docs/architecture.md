@@ -9,14 +9,14 @@ CF consumers -> CF HTTPS route -> agentgateway replicas
                                          |
                               PostgreSQL service binding
                                          |
-                            ephemeral PostgreSQL CF app
+                                 PostgreSQL service
 
 agentgateway replicas -> operator-configured model providers
 ```
 
-The gateway's API resources are authoritative. The broker has no database binding,
-persistent disk, or background workflow state. Only gateway replicas bind to the
-PostgreSQL service. Raw admin/debug stays loopback-only; the management listener
+The gateway's API resources are authoritative. The broker manages them through the
+gateway API; gateway replicas persist configuration and usage in PostgreSQL.
+Raw admin/debug stays loopback-only; the management listener
 requires a separate operator token and app-to-app network policy. It is not
 attached to the public inference route.
 
@@ -43,8 +43,10 @@ overshoot. Crashes can lose unflushed usage. Missing provider usage/pricing can 
 requests uncharged. Windows are epoch-aligned; budget identity is key hash plus
 budget name. Keep key/hash, budget name, unit and window stable during reconciliation.
 
-The current PostgreSQL plan is ephemeral. Loss is accepted and consumers are
-recreated; there is no migration from the previous deployment.
+PostgreSQL durability determines recovery of instance credentials, configuration
+and accounted usage. Back up this state according to the deployment's recovery
+requirements. An ephemeral database is suitable for development but loses state
+when its backing instance is replaced.
 
 ## Build and configuration
 
