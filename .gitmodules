@@ -1,3 +1,6 @@
 [submodule "src/agentgateway"]
 	path = src/agentgateway
 	url = https://github.com/agentgateway/agentgateway
+[submodule "src/higress-mock-server"]
+	path = src/higress-mock-server
+	url = https://github.com/higress-group/mock-server.git

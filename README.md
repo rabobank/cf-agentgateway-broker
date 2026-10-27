@@ -33,6 +33,13 @@ processes and prints the retained log directory. Override `DEV_PORT_BASE` if the
 default port range conflicts with another service. On NixOS, use `GATEWAY_BINARY`
 to select a locally built compatible gateway binary.
 
+Run `devbox run acceptance` after building for the Ginkgo acceptance suite. It
+starts a temporary PostgreSQL cluster using Devbox, hosts Higress's mock LLM
+provider in the test process, and runs the built gateway and broker in
+`cflinuxfs5` containers using Linux Docker host networking. Port 9090 must be
+free for the gateway management API. The suite cleans up its containers and
+database on exit. Docker and the initialized Higress Git submodule are required.
+
 See [deployment instructions](cf/README.md), [lab validation results](cf/verification.md),
 [architecture](docs/architecture.md), and [source findings](docs/source-investigation.md).
 

@@ -5,6 +5,7 @@
   "shell": {
     "scripts": {
       "test": "bash scripts/test",
+      "acceptance": "cd acceptance && go run github.com/onsi/ginkgo/v2/ginkgo --timeout=10m -v",
       "dev": "bash scripts/dev",
       "build": "bash scripts/build",
       "vendor": "bash scripts/vendor"
