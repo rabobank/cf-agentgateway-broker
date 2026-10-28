@@ -1,0 +1,110 @@
+name: Bump agentgateway
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-agentgateway
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      changed: ${{ steps.candidate.outputs.changed }}
+      sha: ${{ steps.candidate.outputs.sha }}
+      version: ${{ steps.candidate.outputs.version }}
+      branch: ${{ steps.candidate.outputs.branch }}
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Select latest agentgateway release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/bump-agentgateway
+
+      - name: Push candidate branch
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- scripts/agentgateway-version src/agentgateway; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          source scripts/agentgateway-version
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName --jq ".[] | select(.headRefName | startswith(\"automation/agentgateway-${AGENTGATEWAY_VERSION}-\")) | .headRefName")
+          if [[ -n "$existing" ]]; then
+            echo "An open PR already proposes ${AGENTGATEWAY_VERSION}: ${existing}"
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="automation/agentgateway-${AGENTGATEWAY_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/agentgateway-version src/agentgateway
+          git commit -m "Bump agentgateway to ${AGENTGATEWAY_VERSION}"
+          git push origin "HEAD:refs/heads/${branch}"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=${AGENTGATEWAY_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+
+  acceptance:
+    needs: propose
+    if: needs.propose.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      ref: ${{ needs.propose.outputs.sha }}
+
+  pull-request:
+    needs: [propose, acceptance]
+    if: needs.propose.outputs.changed == 'true' && needs.acceptance.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.propose.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+          BRANCH: ${{ needs.propose.outputs.branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Bump agentgateway to ${VERSION}"
+          body="Acceptance tests passed: ${RUN_URL}"
+          gh pr create --repo "$REPOSITORY" --head "$BRANCH" --base "$BASE" --title "$title" --body "$body"
+
+  cleanup:
+    needs: [propose, acceptance, pull-request]
+    if: always() && needs.propose.outputs.changed == 'true' && needs.pull-request.result != 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Delete unsuccessful candidate branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ needs.propose.outputs.branch }}
+        run: gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${BRANCH}"

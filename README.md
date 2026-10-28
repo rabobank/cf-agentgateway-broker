@@ -40,6 +40,12 @@ provider in the test process, and runs the built gateway and broker in
 free for the gateway management API. The suite cleans up its containers and
 database on exit. Docker and the initialized Higress Git submodule are required.
 
+The weekly **Bump agentgateway** workflow checks the latest stable upstream
+release. It opens a pull request only after the candidate passes the acceptance
+workflow. Repository or organization Actions settings must permit GitHub Actions
+to create pull requests. The acceptance result is linked in the pull request;
+GitHub may require approval before running additional PR-triggered workflows.
+
 See [deployment instructions](cf/README.md), [lab validation results](cf/verification.md),
 [architecture](docs/architecture.md), and [source findings](docs/source-investigation.md).
 

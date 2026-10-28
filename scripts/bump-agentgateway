@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+source scripts/agentgateway-version
+
+# Resolve an actual release tag rather than treating an arbitrary branch tip as
+# a release. GitHub excludes drafts and prereleases from /releases/latest.
+release=$(gh api repos/agentgateway/agentgateway/releases/latest --jq .tag_name)
+[[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'Unsupported release tag: %s\n' "$release" >&2; exit 1; }
+git -C src/agentgateway fetch --no-tags origin "refs/tags/$release:refs/tags/$release"
+revision=$(git -C src/agentgateway rev-parse "refs/tags/$release^{commit}")
+current=$(git -C src/agentgateway rev-parse HEAD)
+[[ "$current" == "$AGENTGATEWAY_REVISION" ]] || { printf 'Current submodule differs from scripts/agentgateway-version\n' >&2; exit 1; }
+[[ -z $(git -C src/agentgateway status --porcelain) ]] || { printf 'agentgateway checkout has local changes\n' >&2; exit 1; }
+if [[ "$current" == "$revision" ]]; then
+  printf 'agentgateway %s is already selected\n' "$release"
+  exit 0
+fi
+
+# The initial source pin may be ahead of a tagged release. Never downgrade it.
+if [[ $(git -C src/agentgateway rev-parse --is-shallow-repository) == true ]]; then
+  git -C src/agentgateway fetch --unshallow --no-tags origin
+fi
+if ! git -C src/agentgateway merge-base --is-ancestor "$current" "$revision"; then
+  printf 'Latest release %s is not a descendant of the current pin; refusing to downgrade\n' "$release" >&2
+  exit 1
+fi
+git -C src/agentgateway checkout --detach "$revision"
+rust_version=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["toolchain"]["channel"])' src/agentgateway/rust-toolchain.toml)
+[[ "$rust_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'Unsupported Rust channel: %s\n' "$rust_version" >&2; exit 1; }
+if [[ "$rust_version" != "$RUST_VERSION" ]]; then
+  image_tag="rust:${rust_version}-bookworm"
+  digest=$(docker buildx imagetools inspect "$image_tag" --format '{{.Manifest.Digest}}')
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'Invalid image digest: %s\n' "$digest" >&2; exit 1; }
+  RUST_IMAGE="$image_tag@$digest"
+fi
+cat > scripts/agentgateway-version <<EOF
+# Pinned agentgateway release and Rust container used to build it.
+AGENTGATEWAY_VERSION=$release
+AGENTGATEWAY_REVISION=$revision
+RUST_VERSION=$rust_version
+RUST_IMAGE=$RUST_IMAGE
+EOF
+printf 'Updated agentgateway from %s to %s (%s), Rust %s\n' "$current" "$release" "$revision" "$rust_version"

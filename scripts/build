@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/agentgateway-version"
+revision=$(git -C src/agentgateway rev-parse HEAD)
+[[ "$revision" == "$AGENTGATEWAY_REVISION" ]] || { printf 'agentgateway revision does not match scripts/agentgateway-version\n' >&2; exit 1; }
 mkdir -p cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin
 pushd src/agentgateway-broker >/dev/null
 CGO_ENABLED=0 go build -trimpath -o ../../cf/dist/broker/bin/broker .
@@ -8,10 +11,11 @@ pushd src/cf-launcher >/dev/null
 CGO_ENABLED=0 go build -trimpath -o ../../cf/dist/broker/bin/launcher .
 popd >/dev/null
 cp cf/dist/broker/bin/launcher cf/dist/gateway/bin/launcher
-docker run --rm --network none -v "$(pwd)/src:/src" -v "$(pwd)/cf/dist/gateway:/out" rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 bash -ec '
+docker run --rm --network none -v "$(pwd)/src:/src" -v "$(pwd)/cf/dist/gateway:/out" \
+  -e VERSION="$AGENTGATEWAY_VERSION" -e GIT_REVISION="$AGENTGATEWAY_REVISION" -e RUSTUP_TOOLCHAIN="$RUST_VERSION" "$RUST_IMAGE" bash -ec '
   cd /src/agentgateway
-  export CARGO_TARGET_DIR=/src/cf-build-target-lowmem VERSION=main-c0354ea4 GIT_REVISION=c0354ea426b25b4b3df357ba4b6afabcf4309660
-  export RUSTUP_TOOLCHAIN=1.99.0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 CARGO_PROFILE_RELEASE_OPT_LEVEL=0
+  export CARGO_TARGET_DIR=/src/cf-build-target-lowmem
+  export CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 CARGO_PROFILE_RELEASE_OPT_LEVEL=0
   cargo --config /src/agentgateway-vendor/config.toml --config "source.vendored-sources.directory=\"/src/agentgateway-vendor/crates\"" build --frozen --release -p agentgateway-app --bin agentgateway
   cp "$CARGO_TARGET_DIR/release/agentgateway" /out/bin/agentgateway
   cp "$(gcc -print-file-name=libgcc_s.so.1)" /out/lib/

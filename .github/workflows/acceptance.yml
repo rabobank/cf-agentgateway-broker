@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Candidate commit to build and test
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +22,7 @@ jobs:
       - name: Check out source and submodules
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           persist-credentials: false
 
