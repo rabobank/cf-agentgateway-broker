@@ -1,0 +1,51 @@
+name: Acceptance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Devbox
+        uses: jetify-com/devbox-install-action@8c6a66ed6273138b1915457069de78cb52fe3bd7 # v0.15.0
+        with:
+          devbox-version: 0.17.5
+
+      - name: Vendor Rust dependencies
+        run: devbox run vendor
+
+      - name: Build application binaries
+        run: devbox run build
+
+      # The gateway launcher uses fixed management ports, so this suite must
+      # run serially rather than using Ginkgo's parallel processes.
+      - name: Run acceptance tests
+        run: >-
+          devbox run -- go -C acceptance run github.com/onsi/ginkgo/v2/ginkgo
+          --randomize-all --fail-on-pending --fail-on-empty --trace
+          --github-output --force-newlines --no-color
+          --json-report=acceptance.json --junit-report=acceptance.xml
+          --output-dir="${RUNNER_TEMP}/acceptance-reports"
+          --timeout=10m --poll-progress-after=2m --poll-progress-interval=30s
+
+      - name: Upload acceptance reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: acceptance-reports
+          path: ${{ runner.temp }}/acceptance-reports/
+          if-no-files-found: ignore
+          retention-days: 7
