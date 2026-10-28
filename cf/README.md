@@ -18,8 +18,12 @@ to the gateway. The supplied manifest starts two gateway instances and one broke
 
 ## Build
 
-Initialize the pinned gateway submodule, run `devbox run vendor`, then
-`devbox run build`. Artifacts are written to `cf/dist/gateway` and `cf/dist/broker`.
+Download the gateway and broker Linux AMD64 bundles and `SHA256SUMS` from a
+GitHub release, verify them with `sha256sum --check SHA256SUMS`, and extract the
+gateway bundle into `cf/dist/gateway` and the broker bundle into `cf/dist/broker`.
+
+Alternatively, initialize the pinned gateway submodule, run `devbox run vendor`,
+then `devbox run build`. Artifacts are written to `cf/dist/gateway` and `cf/dist/broker`.
 
 The gateway builds in a digest-pinned Rust/Bookworm image without embedded UI
 assets, retaining the management API. The current build profile uses one job,

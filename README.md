@@ -46,6 +46,12 @@ workflow. Repository or organization Actions settings must permit GitHub Actions
 to create pull requests. The acceptance result is linked in the pull request;
 GitHub may require approval before running additional PR-triggered workflows.
 
+To publish a release, run the **Release** GitHub Actions workflow on the default
+branch with a new stable version such as `v1.2.3`. It runs acceptance tests before
+creating the release, then attaches the tested Linux AMD64 gateway and broker
+bundles and their SHA-256 checksums. Extract the gateway archive into
+`cf/dist/gateway` and the broker archive into `cf/dist/broker` to deploy them.
+
 See [deployment instructions](cf/README.md), [lab validation results](cf/verification.md),
 [architecture](docs/architecture.md), and [source findings](docs/source-investigation.md).
 

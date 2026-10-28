@@ -10,6 +10,11 @@ on:
         description: Candidate commit to build and test
         required: false
         type: string
+      publish-build:
+        description: Upload the acceptance-tested deployment bundles
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,6 +52,24 @@ jobs:
           --json-report=acceptance.json --junit-report=acceptance.xml
           --output-dir="${RUNNER_TEMP}/acceptance-reports"
           --timeout=10m --poll-progress-after=2m --poll-progress-interval=30s
+
+      - name: Package tested deployment bundles
+        if: inputs.publish-build
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-bundles"
+          tar -C cf/dist/gateway -czf "$RUNNER_TEMP/release-bundles/agentgateway-linux-amd64.tar.gz" bin lib
+          tar -C cf/dist/broker -czf "$RUNNER_TEMP/release-bundles/agentgateway-broker-linux-amd64.tar.gz" bin
+          cd "$RUNNER_TEMP/release-bundles"
+          sha256sum ./*.tar.gz > SHA256SUMS
+
+      - name: Upload tested deployment bundles
+        if: inputs.publish-build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested-cf-bundles
+          path: ${{ runner.temp }}/release-bundles/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload acceptance reports
         if: always()
