@@ -1,0 +1,25 @@
+# Non-secret settings for the local CF lab. Copy to local-vars.yml and supply
+# management_token, broker_password, trusted_ca, and any provider credentials.
+gateway_app_name: agentgateway
+broker_app_name: agentgateway-broker
+stack: cflinuxfs5
+buildpack: binary_buildpack
+gateway_memory: 768M
+gateway_disk_quota: 1G
+gateway_instances: 2
+broker_memory: 128M
+broker_disk_quota: 1G
+broker_instances: 1
+gateway_route: agentgateway.10.246.0.21.sslip.io
+broker_route: agentgateway-broker.10.246.0.21.sslip.io
+database_service_name: agentgateway-state
+installation: cf-agentgateway
+management_url: http://agentgateway-management.apps.internal:9090
+gateway_url: https://agentgateway.10.246.0.21.sslip.io/v1
+model_aliases: deepseek-v4-flash
+usd_allowance: '10'
+budget_window: 24h
+gateway_models: >-
+  [{"name":"deepseek-v4-flash","provider":"openAI","params":{"model":"deepseek-v4-flash","baseUrl":"http://192.168.2.148:8000/v1"}}]
+model_catalog: >-
+  {"providers":{"openai":{"models":{"deepseek-v4-flash":{"rates":{"input":"1","output":"1"}}}}}}

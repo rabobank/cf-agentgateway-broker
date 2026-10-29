@@ -1,39 +1,41 @@
 ---
 applications:
-- name: agentgateway
+- name: ((gateway_app_name))
   path: dist/gateway
-  stack: cflinuxfs5
-  buildpacks: [binary_buildpack]
+  stack: ((stack))
+  buildpacks: [((buildpack))]
   command: exec ./bin/launcher
-  memory: 768M
-  disk_quota: 1G
-  instances: 2
+  memory: ((gateway_memory))
+  disk_quota: ((gateway_disk_quota))
+  instances: ((gateway_instances))
   health-check-type: port
   routes:
-  - route: agentgateway.((domain))
-  services: [agentgateway-state]
+  - route: ((gateway_route))
+  services: [((database_service_name))]
   env:
     APP_ROLE: gateway
+    DATABASE_SERVICE_NAME: ((database_service_name))
     MANAGEMENT_TOKEN: ((management_token))
     GATEWAY_MODELS: ((gateway_models))
     MODEL_CATALOG: ((model_catalog))
-- name: agentgateway-broker
+- name: ((broker_app_name))
   path: dist/broker
-  stack: cflinuxfs5
-  buildpacks: [binary_buildpack]
+  stack: ((stack))
+  buildpacks: [((buildpack))]
   command: exec ./bin/launcher
-  memory: 128M
-  instances: 1
+  memory: ((broker_memory))
+  disk_quota: ((broker_disk_quota))
+  instances: ((broker_instances))
   routes:
-  - route: agentgateway-broker.((domain))
+  - route: ((broker_route))
   env:
     APP_ROLE: broker
     BROKER_PASSWORD: ((broker_password))
-    INSTALLATION: cf-agentgateway
-    MANAGEMENT_URL: http://agentgateway-management.apps.internal:9090
+    INSTALLATION: ((installation))
+    MANAGEMENT_URL: ((management_url))
     MANAGEMENT_TOKEN: ((management_token))
-    GATEWAY_URL: https://agentgateway.((domain))/v1
+    GATEWAY_URL: ((gateway_url))
     GATEWAY_TRUSTED_CA: ((trusted_ca))
-    MODEL_ALIASES: deepseek-v4-flash
-    USD_ALLOWANCE: '10'
-    BUDGET_WINDOW: 24h
+    MODEL_ALIASES: ((model_aliases))
+    USD_ALLOWANCE: ((usd_allowance))
+    BUDGET_WINDOW: ((budget_window))

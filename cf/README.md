@@ -1,135 +1,155 @@
 # Deploying to Cloud Foundry
 
-Deploy the broker and gateway as separate CF apps, with a PostgreSQL service bound
-to the gateway. The supplied manifest starts two gateway instances and one broker.
+This bundle deploys the agentgateway inference app and its Open Service Broker
+as separate Cloud Foundry apps. PostgreSQL stores gateway configuration and usage.
 
 ## Prerequisites
 
-- CF CLI access to your target organization and space, including permission to
-  deploy apps, bind services, and create app-to-app network policies.
-- Permission to register a service broker and enable access to its plans.
-- A foundation with `cflinuxfs5`, the binary buildpack, container networking, and
-  an internal domain such as `apps.internal`.
-- A PostgreSQL service whose binding supplies a `postgres://` or `postgresql://`
-  connection string in `uri` or `url`. The database role must be able to create
-  and update the gateway's schema. Select persistence and backups to suit your needs.
-- Upstream model-provider access, credentials, and pricing information.
-- Docker and the [development tools](../README.md#development) for source builds.
+- CF CLI v8 access to a space where you can deploy apps, bind services, and
+  create app-to-app network policies; broker registration requires the relevant
+  operator permissions.
+- A foundation with `cflinuxfs5`, the binary buildpack, container networking,
+  an internal domain such as `apps.internal`, and routes for both apps.
+- A PostgreSQL service binding with a `postgres://` or `postgresql://` URI in
+  `uri` or `url`. Its database role must be able to create and update schemas.
+- Provider connectivity and model pricing. For source builds, also install Docker
+  and the tools described in the repository's development README.
 
-## Build
+## 1. Unpack the release
 
-Download the gateway and broker Linux AMD64 bundles and `SHA256SUMS` from a
-GitHub release, verify them with `sha256sum --check SHA256SUMS`, and extract the
-gateway bundle into `cf/dist/gateway` and the broker bundle into `cf/dist/broker`.
+Download `cf-agentgateway-broker-linux-amd64.tar.gz` and `SHA256SUMS` from the
+same GitHub release. In an empty directory:
 
-Alternatively, initialize the pinned gateway submodule, run `devbox run vendor`,
-then `devbox run build`. Artifacts are written to `cf/dist/gateway` and `cf/dist/broker`.
+```sh
+sha256sum --check SHA256SUMS
+tar -xzf cf-agentgateway-broker-linux-amd64.tar.gz
+```
 
-The gateway builds in a digest-pinned Rust/Bookworm image without embedded UI
-assets, retaining the management API. The current build profile uses one job,
-disables LTO and optimization to reduce build memory. Generated binaries and
-deployment secrets are ignored by Git.
+The archive contains this `README.md`, `manifest.yml`, `dev-vars.yml`, and the
+tested binaries under `dist/`. Run the following commands from this directory.
+For source builds instead, initialize submodules, run `devbox run vendor` and
+`devbox run build` at the repository root, then run the deployment commands
+from `cf/`.
 
-## Configure
+## 2. Configure
 
-Target your organization and space, then create a PostgreSQL service instance
-named `agentgateway-state` using an offering and plan available on your foundation:
+`dev-vars.yml` contains non-secret values for the local lab, including its
+DeepSeek-compatible endpoint. Copy it for your deployment and adjust every value
+to match your foundation, provider, and service plan:
+
+```sh
+cp dev-vars.yml local-vars.yml
+```
+
+Add the following secret values to `local-vars.yml`; keep that file private:
+
+```yaml
+management_token: 'REPLACE_WITH_A_RANDOM_MANAGEMENT_TOKEN'
+broker_password: 'REPLACE_WITH_A_DIFFERENT_RANDOM_BROKER_PASSWORD'
+trusted_ca: '' # Empty for system trust, or replace with the PEM issuer CA
+```
+
+For a PEM CA, use a YAML block scalar (for example `trusted_ca: |`) and indent
+the complete certificate beneath it.
+
+Provider credentials belong in the `gateway_models` JSON, if your provider
+requires them. The file is passed to CF as environment configuration. Never
+commit real credentials. In the repository, `cf/local-vars.yml` and
+`cf/local-secrets.yml` are ignored. The lab's `cf/local-secrets.yml` contains
+the existing credentials and can be used as a second vars file:
+`--vars-file dev-vars.yml --vars-file local-secrets.yml`.
+
+| Variables | What to set |
+| --- | --- |
+| `gateway_app_name`, `broker_app_name` | App names in the target space |
+| `stack`, `buildpack` | CF stack and binary buildpack names |
+| `gateway_memory`, `gateway_disk_quota`, `gateway_instances` | Gateway capacity and replica count |
+| `broker_memory`, `broker_disk_quota`, `broker_instances` | Broker capacity and replica count |
+| `gateway_route`, `broker_route` | Public app routes, without a scheme |
+| `database_service_name` | Name of the existing PostgreSQL service instance to bind |
+| `installation` | Unique broker installation identifier for shared gateway state |
+| `management_url` | Private gateway management URL, including port 9090 |
+| `management_token`, `broker_password` | Distinct strong credentials for management and OSB |
+| `gateway_url` | Public inference URL including `https://` and `/v1` |
+| `trusted_ca` | PEM CA for the public inference route, or an empty string |
+| `gateway_models`, `model_catalog` | JSON strings for provider models and their pricing |
+| `model_aliases`, `usd_allowance`, `budget_window` | Broker model allowlist and per-instance USD allowance |
+
+The aliases must match `gateway_models`, and catalog rates must correspond to
+the provider's reported usage. The model catalog's prices are per million tokens.
+The dev vars are lab examples, not defaults suitable for every foundation.
+
+## 3. Deploy the apps
+
+Target the intended org and space and create a PostgreSQL service if needed:
 
 ```sh
 cf target -o YOUR_ORG -s YOUR_SPACE
 cf marketplace
-cf create-service POSTGRES_OFFERING POSTGRES_PLAN agentgateway-state
+cf create-service POSTGRES_OFFERING POSTGRES_PLAN YOUR_DATABASE_SERVICE_NAME
 ```
 
-Prepare an untracked vars file for `cf/manifest.yml` with these values:
-
-| Variable | Value |
-| --- | --- |
-| `domain` | Your public CF application domain |
-| `broker_password` | A strong password for the broker's `broker` Basic-auth user |
-| `management_token` | A separate strong token shared by the broker and gateway |
-| `gateway_models` | JSON string containing native agentgateway model definitions |
-| `model_catalog` | JSON string containing the native model cost catalog |
-| `trusted_ca` | PEM issuer CA bundle for the public inference route, or an empty string when consumers use system trust |
-
-The sample manifest currently selects the alias `deepseek-v4-flash`, a USD allowance
-of 10, and a `24h` window. Set its broker `MODEL_ALIASES`, `USD_ALLOWANCE`, and
-`BUDGET_WINDOW` environment values for your plan. The model aliases must match
-`gateway_models`; catalog rates must match your provider's reported usage.
-See the pinned [agentgateway source](../src/agentgateway) for its configuration schema.
-
-Keep the management token consistent across replicas, and use a distinct broker
-`INSTALLATION` value for installations sharing a gateway. If your internal domain
-differs, update the manifest's `MANAGEMENT_URL` and the discovery route below.
-
-## Deploy and connect the apps
-
-Push without starting so the PostgreSQL binding and network policy are configured
-before the gateway initializes:
+Set `database_service_name` in `local-vars.yml` to that instance's name. Push
+without starting, then map a private route and grant the broker network access:
 
 ```sh
-cf push -f cf/manifest.yml --vars-file /path/to/vars.yml --no-start
+cf push -f manifest.yml --vars-file local-vars.yml --no-start --redact-env
+cf map-route YOUR_GATEWAY_APP apps.internal --hostname YOUR_MANAGEMENT_HOSTNAME
+cf add-network-policy YOUR_BROKER_APP YOUR_GATEWAY_APP --protocol tcp --port 9090
+cf start YOUR_GATEWAY_APP
+cf start YOUR_BROKER_APP
+```
+
+Replace the names, internal domain, and hostname in those commands with your
+configured values. `management_url` must point to the mapped internal route.
+Ensure gateway-to-PostgreSQL and gateway-to-provider networking is allowed;
+service binding does not necessarily create the required network policy.
+
+For the local lab using its existing secrets file:
+
+```sh
+cf push -f manifest.yml --vars-file dev-vars.yml --vars-file local-secrets.yml --no-start --redact-env
 cf map-route agentgateway apps.internal --hostname agentgateway-management
 cf add-network-policy agentgateway-broker agentgateway --protocol tcp --port 9090
-```
-
-Configure network access from the gateway to PostgreSQL and the selected providers.
-Some service brokers install database app-to-app policy on bind; others require
-operator-configured security groups or network rules. Do not assume binding alone
-grants network access. The launcher reads the database URI from `VCAP_SERVICES`.
-
-```sh
 cf start agentgateway
 cf start agentgateway-broker
 ```
 
-Gorouter terminates public TLS and forwards inference to `$PORT`. Management runs
-on private port 9090 with its own token. The internal route provides container
-discovery; it does not expose management through the public inference route.
-Raw admin/debug remains loopback-only.
+Gorouter terminates public TLS and forwards inference to `$PORT`. Management
+uses the private route on port 9090, protected by its own token. Raw admin/debug
+remains loopback-only.
 
-## Register and consume the service
+## 4. Register and use the broker
 
-Register `https://agentgateway-broker.YOUR_DOMAIN` using the `broker` username and
-configured password. The CLI can read the password from `CF_BROKER_PASSWORD` rather
-than a command-line argument. Cloud Controller must trust the broker route's TLS
-issuer and be able to reach it.
+Register the broker at `https://YOUR_BROKER_ROUTE` using username `broker` and
+the configured `broker_password`. Cloud Controller must trust the broker route's
+TLS issuer and be able to reach it.
 
 ```sh
-cf create-service-broker agentgateway broker https://agentgateway-broker.YOUR_DOMAIN
+cf create-service-broker agentgateway broker https://YOUR_BROKER_ROUTE
 cf enable-service-access agentgateway
 cf create-service agentgateway shared inference
 cf bind-service YOUR_APP inference
 ```
 
-Restart or restage the consumer to load the binding. App bindings and service keys
-return `url`, `api_key`, and `trusted_ca`. Clients send the key as a Bearer token and
-use the supplied PEM bundle for TLS verification. If the bundle is empty, use
-system trust. Each service instance has one key shared by its bindings; unbind
-does not revoke that key, while deprovision removes it.
+Enter the broker password at the prompt, or supply it through `CF_BROKER_PASSWORD`.
 
-## Verify
+Restart or restage the consumer to load the binding. App bindings and service
+keys return `url`, `api_key`, and `trusted_ca`. Clients send the key as a Bearer
+token and use the PEM bundle for TLS verification, or system trust when empty.
+Each instance has one key shared by its bindings: unbind preserves the key and
+deprovision revokes it.
 
-- Check gateway and broker instances with `cf apps`.
-- Check broker -> gateway TCP/9090 policy and database/provider connectivity.
-- Exercise provision, bind, service keys, unbind and delete through CAPI.
-- Call `/v1/models` and `/v1/chat/completions`, including streaming, from a bound app.
-- Scale the gateway and confirm new replicas recognize existing credentials.
-- Restart gateway instances and confirm configuration and persisted usage survive.
-- Confirm public tenant requests cannot access management or raw debug endpoints.
+## 5. Verify
+
+- Check both apps with `cf apps` and inspect their logs if they fail to start.
+- Create and bind a service instance, then call `/v1/models` and
+  `/v1/chat/completions` using the binding credentials.
+- Check that the broker can reach private gateway management and that the
+  gateway can reach PostgreSQL and the provider.
+- Restart or scale gateway instances and confirm existing credentials still work.
 
 Budgets charge after responses and synchronize across replicas periodically.
 Concurrent requests, streams and synchronization lag can overshoot an allowance.
 Missing provider usage or catalog pricing can leave requests uncharged; verify
 accounting with your chosen models before relying on it.
-
-## Development checks
-
-`devbox run dev` runs two local gateways, PostgreSQL and a
-mock provider. It needs a compatible Linux runtime; on NixOS, set `GATEWAY_BINARY`
-to a locally built compatible gateway or run the harness in a compatible container.
-
-The scripts directory contains only development tasks: `build`, `vendor`, `test`,
-and the Bash integration harness `dev`. Deployment uses the CF CLI procedure
-above. Historical validation results and environment-specific recovery steps are
-recorded in [lab validation](verification.md).

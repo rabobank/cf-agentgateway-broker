@@ -16,5 +16,6 @@ test/.work/
 nix-*/
 /cf/dist/
 /cf/local-vars.yml
+/cf/local-secrets.yml
 /src/cf-build-target/
 /src/cf-build-target-lowmem/

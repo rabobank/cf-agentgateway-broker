@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       publish-build:
-        description: Upload the acceptance-tested deployment bundles
+        description: Upload the acceptance-tested deployment bundle
         required: false
         type: boolean
         default: false
@@ -53,16 +53,21 @@ jobs:
           --output-dir="${RUNNER_TEMP}/acceptance-reports"
           --timeout=10m --poll-progress-after=2m --poll-progress-interval=30s
 
-      - name: Package tested deployment bundles
+      - name: Package tested deployment bundle
         if: inputs.publish-build
         run: |
           mkdir -p "$RUNNER_TEMP/release-bundles"
-          tar -C cf/dist/gateway -czf "$RUNNER_TEMP/release-bundles/agentgateway-linux-amd64.tar.gz" bin lib
-          tar -C cf/dist/broker -czf "$RUNNER_TEMP/release-bundles/agentgateway-broker-linux-amd64.tar.gz" bin
+          tar -czf "$RUNNER_TEMP/release-bundles/cf-agentgateway-broker-linux-amd64.tar.gz" \
+            --transform='s|^cf/README.md$|README.md|' \
+            --transform='s|^cf/manifest.yml$|manifest.yml|' \
+            --transform='s|^cf/dev-vars.yml$|dev-vars.yml|' \
+            --transform='s|^cf/dist/|dist/|' \
+            cf/README.md cf/manifest.yml cf/dev-vars.yml \
+            cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin
           cd "$RUNNER_TEMP/release-bundles"
           sha256sum ./*.tar.gz > SHA256SUMS
 
-      - name: Upload tested deployment bundles
+      - name: Upload tested deployment bundle
         if: inputs.publish-build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

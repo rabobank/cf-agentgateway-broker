@@ -182,7 +182,8 @@ func (e *environment) startGateway() {
 	e.startContainer("gateway", map[string]string{
 		"APP_ROLE": "gateway", "PORT": strconv.Itoa(e.gatewayPort),
 		"MANAGEMENT_TOKEN": managementToken, "GATEWAY_MODELS": jsonString(models), "MODEL_CATALOG": jsonString(catalog),
-		"VCAP_SERVICES": jsonString(map[string]any{"postgres": []any{map[string]any{"name": "agentgateway-state", "credentials": map[string]string{"uri": uri}}}}),
+		"DATABASE_SERVICE_NAME": "acceptance-state",
+		"VCAP_SERVICES":         jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}),
 	})
 	Eventually(func() int {
 		return status(http.MethodGet, "http://127.0.0.1:9090/api/runtime", "", managementToken, false)

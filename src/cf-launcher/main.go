@@ -29,7 +29,7 @@ func save(name string, value any) string {
 	}
 	return name
 }
-func database(raw string) (string, error) {
+func database(raw, serviceName string) (string, error) {
 	var services map[string][]struct {
 		Name        string         `json:"name"`
 		Credentials map[string]any `json:"credentials"`
@@ -39,7 +39,7 @@ func database(raw string) (string, error) {
 	}
 	for _, group := range services {
 		for _, s := range group {
-			if s.Name == "agentgateway-state" {
+			if s.Name == serviceName {
 				for _, field := range []string{"uri", "url"} {
 					if uri, ok := s.Credentials[field].(string); ok {
 						u, e := url.Parse(uri)
@@ -52,7 +52,7 @@ func database(raw string) (string, error) {
 			}
 		}
 	}
-	return "", errors.New("agentgateway-state PostgreSQL binding with uri is required")
+	return "", fmt.Errorf("%s PostgreSQL binding with uri is required", serviceName)
 }
 func run(mode string) error {
 	port, e := strconv.Atoi(required("PORT"))
@@ -76,7 +76,11 @@ func run(mode string) error {
 			config.(map[string]any)["trusted_ca_file"] = "config/inference-ca.pem"
 		}
 	case "gateway":
-		uri, e := database(required("VCAP_SERVICES"))
+		serviceName := os.Getenv("DATABASE_SERVICE_NAME")
+		if serviceName == "" {
+			serviceName = "agentgateway-state"
+		}
+		uri, e := database(required("VCAP_SERVICES"), serviceName)
 		if e != nil {
 			return e
 		}
