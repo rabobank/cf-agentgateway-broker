@@ -46,6 +46,7 @@ Add the following secret values to `local-vars.yml`; keep that file private:
 ```yaml
 management_token: 'REPLACE_WITH_A_RANDOM_MANAGEMENT_TOKEN'
 broker_password: 'REPLACE_WITH_A_DIFFERENT_RANDOM_BROKER_PASSWORD'
+capsule_signing_seed: 'REPLACE_WITH_A_STABLE_32_BYTE_HEX_ED25519_SEED'
 trusted_ca: '' # Empty for system trust, or replace with the PEM issuer CA
 ```
 
@@ -74,10 +75,23 @@ the existing credentials and can be used as a second vars file:
 | `trusted_ca` | PEM CA for the public inference route, or an empty string |
 | `gateway_models`, `model_catalog` | JSON strings for provider models and their pricing |
 | `model_aliases`, `usd_allowance`, `budget_window` | Broker model allowlist and per-instance USD allowance |
+| `mcp_servers` | JSON array of shared MCP servers: `name`, HTTP(S) `url`, optional literal `headers`; `[]` disables MCP |
+| `mcp_url` | Public MCP URL, including `https://` and `/mcp` |
+| `capsule_signing_seed` | Stable private 32-byte Ed25519 seed encoded as 64 hex characters; shared by gateway sidecars |
+| `capsule_witness_url`, `capsule_witness_public_key` | External witness URL and pinned hex Ed25519 public key; both empty disables delivery |
 
 The aliases must match `gateway_models`, and catalog rates must correspond to
 the provider's reported usage. The model catalog's prices are per million tokens.
 The dev vars are lab examples, not defaults suitable for every foundation.
+
+For example, set `mcp_servers` to a JSON array containing a server named
+`shared-tools` with `url` pointing to its HTTP MCP endpoint. Every service instance
+gets access to this global list. A Go CF sidecar authenticates MCP and writes
+service-instance-attributed signed capsules and a checkpointed shared log into
+the existing PostgreSQL database. The gateway allocation includes 128 MB reserved
+for this sidecar; size `gateway_memory` for both processes. Generate and preserve
+the signing seed before deployment. See the repository's `docs/mcp-capsules.md`
+for storage, correlation, checkpointing, and failure semantics.
 
 ## 3. Deploy the apps
 
@@ -139,6 +153,10 @@ keys return `url`, `api_key`, and `trusted_ca`. Clients send the key as a Bearer
 token and use the PEM bundle for TLS verification, or system trust when empty.
 Each instance has one key shared by its bindings: unbind preserves the key and
 deprovision revokes it.
+
+When `mcp_servers` is nonempty, bindings also return `mcp_url`. Use the same
+Bearer key and trust CA for MCP. Tool recording fails closed; external witness
+delivery happens in the background. MCP calls do not charge the inference budget.
 
 ## 5. Verify
 

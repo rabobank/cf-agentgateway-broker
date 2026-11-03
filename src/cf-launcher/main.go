@@ -72,6 +72,13 @@ func run(mode string) error {
 	switch mode {
 	case "broker":
 		config = map[string]any{"listen": fmt.Sprintf("0.0.0.0:%d", port), "username": "broker", "password": required("BROKER_PASSWORD"), "installation": required("INSTALLATION"), "gateway_url": required("GATEWAY_URL"), "management_url": required("MANAGEMENT_URL"), "management_token": required("MANAGEMENT_TOKEN"), "service_id": "1b0b97a6-41df-4a39-9b23-53f17a5f85be", "plan_id": "eba8b5b0-e8a7-49cb-8188-cfa52ed43bdd", "models": strings.Split(required("MODEL_ALIASES"), ","), "budget": json.Number(required("USD_ALLOWANCE")), "window": required("BUDGET_WINDOW")}
+		mcp, err := mcpConfig(os.Getenv("MCP_SERVERS"))
+		if err != nil {
+			return err
+		}
+		if mcp != nil {
+			config.(map[string]any)["mcp_url"] = required("MCP_URL")
+		}
 		if ca != "" {
 			config.(map[string]any)["trusted_ca_file"] = "config/inference-ca.pem"
 		}
@@ -101,6 +108,13 @@ func run(mode string) error {
 			"gateways": map[string]any{"inference": map[string]any{"port": port}, "management": map[string]any{"port": 9090}},
 			"llm":      map[string]any{"gateways": []string{"inference"}, "models": models, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{}}, "authorization": map[string]any{"rules": []string{`(request.method == "GET" && request.path == "/v1/models") || (request.method == "POST" && request.path == "/v1/chat/completions")`}}}},
 			"ui":       map[string]any{"gateways": []string{"management"}, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{map[string]any{"key": required("MANAGEMENT_TOKEN")}}}}},
+		}
+		mcp, err := mcpConfig(os.Getenv("MCP_SERVERS"))
+		if err != nil {
+			return err
+		}
+		if mcp != nil {
+			config.(map[string]any)["mcp"] = mcp
 		}
 		binary = "bin/agentgateway"
 		args = []string{"agentgateway", "-f", "config/runtime.json"}

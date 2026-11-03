@@ -36,6 +36,7 @@ type Config struct {
 	Password        string      `json:"password"`
 	Installation    string      `json:"installation"`
 	GatewayURL      string      `json:"gateway_url"`
+	MCPURL          string      `json:"mcp_url"`
 	ManagementURL   string      `json:"management_url"`
 	ManagementToken string      `json:"management_token"`
 	CAFile          string      `json:"ca_file"`
@@ -93,6 +94,12 @@ func (e *apiError) Error() string { return e.message }
 var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func (c Config) validate() error {
+	if c.MCPURL != "" {
+		u, err := url.Parse(c.MCPURL)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
+			return errors.New("invalid MCP URL")
+		}
+	}
 	for name, value := range map[string]string{"listen": c.Listen, "username": c.Username, "password": c.Password, "installation": c.Installation, "service_id": c.ServiceID, "plan_id": c.PlanID, "window": c.Window} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
@@ -325,7 +332,11 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 503, "instance credential is not recoverable")
 			return
 		}
-		write(w, 201, map[string]any{"credentials": map[string]string{"url": b.cfg.GatewayURL, "api_key": existing.Value.Key, "trusted_ca": b.trustedCA}})
+		credentials := map[string]string{"url": b.cfg.GatewayURL, "api_key": existing.Value.Key, "trusted_ca": b.trustedCA}
+		if b.cfg.MCPURL != "" {
+			credentials["mcp_url"] = b.cfg.MCPURL
+		}
+		write(w, 201, map[string]any{"credentials": credentials})
 		return
 	}
 	if r.Method == http.MethodDelete {
