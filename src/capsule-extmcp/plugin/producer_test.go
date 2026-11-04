@@ -4,6 +4,7 @@ import (
 	"cf-agentgateway-capsule/plugin"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	emit "github.com/action-state-group/capsule-emit/go"
 	. "github.com/onsi/ginkgo/v2"
@@ -12,6 +13,41 @@ import (
 )
 
 var _ = Describe("Signed capsules", func() {
+	It("losslessly commits decimals and arbitrary JSON integers in requests and results", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		body := json.RawMessage(`{"temperature":0.5,"large":9007199254740993,"exponent":1e100,"negativeZero":-0.0,"string":"0.5"}`)
+		wrapper := map[string]string{"encoding": "mcp-json-bytes/base64/v1", "data": base64.StdEncoding.EncodeToString(body)}
+		digest, err := emit.DigestJSON(wrapper)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "numbers", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		plan, err := producer.Seal(record, body)
+		Expect(err).NotTo(HaveOccurred())
+		var content map[string]any
+		Expect(json.Unmarshal(plan.Payload, &content)).To(Succeed())
+		compute := content["model_attestation"].(map[string]any)["compute_attestation"].(map[string]any)
+		Expect(compute["agent_input_digest"]).To(Equal(digest))
+		record.ID = "numbers/outcome"
+		record.Parent = plan.CapsuleID
+		record.Phase = "confirmed"
+		outcome, err := producer.Seal(record, body)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(json.Unmarshal(outcome.Payload, &content)).To(Succeed())
+		compute = content["model_attestation"].(map[string]any)["compute_attestation"].(map[string]any)
+		Expect(compute["agent_output_digest"]).To(Equal(digest))
+		Expect(content["effect"].(map[string]any)["response_digest"]).To(Equal(digest))
+		check, err := emit.VerifyCapsule(outcome.Payload)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(check.OK).To(BeTrue())
+		decoded, err := base64.StdEncoding.DecodeString(wrapper["data"])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(decoded).To(Equal([]byte(body)))
+		changed, err := producer.Seal(record, json.RawMessage(`{"temperature":"0.5"}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(changed.CapsuleID).NotTo(Equal(outcome.CapsuleID))
+	})
 	It("commits the service instance and links a verifiable outcome", func() {
 		pub, key, err := ed25519.GenerateKey(rand.Reader)
 		Expect(err).NotTo(HaveOccurred())

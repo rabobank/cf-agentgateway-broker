@@ -2,7 +2,9 @@ package plugin
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	emit "github.com/action-state-group/capsule-emit/go"
 )
 
@@ -17,12 +19,19 @@ func NewProducer(key ed25519.PrivateKey) (*SignedProducer, error) {
 }
 
 func (p *SignedProducer) Seal(record Capsule, body json.RawMessage) (emit.Result, error) {
+	if !json.Valid(body) {
+		return emit.Result{}, errors.New("MCP body must be valid JSON")
+	}
+	// Commit exact gateway-observed JSON bytes through a versioned string-only
+	// envelope, preserving numeric lexemes without exceeding AAC's number profile.
+	encodedBody := map[string]string{"encoding": "mcp-json-bytes/base64/v1", "data": base64.StdEncoding.EncodeToString(body)}
 	metadata, err := json.Marshal(struct {
 		Identity
-		Phase    string   `json:"phase"`
-		Tool     string   `json:"tool"`
-		Backends []string `json:"backends"`
-	}{record.Identity, record.Phase, record.Tool, record.Backends})
+		Phase        string   `json:"phase"`
+		Tool         string   `json:"tool"`
+		Backends     []string `json:"backends"`
+		BodyEncoding string   `json:"body_encoding"`
+	}{record.Identity, record.Phase, record.Tool, record.Backends, "mcp-json-bytes/base64/v1"})
 	if err != nil {
 		return emit.Result{}, err
 	}
@@ -32,7 +41,7 @@ func (p *SignedProducer) Seal(record Capsule, body json.RawMessage) (emit.Result
 		input.Effect.EffectAttestation = emit.AttestationRuntimeClaimed
 	}
 	sealed := emit.SealInput{Capsule: input, Identity: p.identity, Runtime: "agentgateway"}
-	digest, err := emit.DigestJSON(body)
+	digest, err := emit.DigestJSON(encodedBody)
 	if err != nil {
 		return emit.Result{}, err
 	}
@@ -40,9 +49,9 @@ func (p *SignedProducer) Seal(record Capsule, body json.RawMessage) (emit.Result
 		sealed.Capsule.Effect.ResponseDigest = digest
 	}
 	if record.Parent == "" {
-		sealed.Payload = body
+		sealed.Payload = encodedBody
 	} else {
-		sealed.AgentOutput = body
+		sealed.AgentOutput = encodedBody
 		sealed.Capsule.Chain = &emit.Chain{ParentCapsuleID: record.Parent, Relation: emit.ChainConfirms}
 	}
 	return emit.Seal(sealed)

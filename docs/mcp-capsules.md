@@ -35,6 +35,15 @@ recording error does not undo a tool action that already executed.
 
 ## Persistence and checkpoints
 
+Request/result digest preimages use the versioned wrapper
+`{"encoding":"mcp-json-bytes/base64/v1","data":"<standard padded base64>"}`.
+The data is the exact JSON bytes observed on the ExtMcp wire. This losslessly
+supports decimal and large integer values while keeping the digest preimage
+within AAC's string-only numeric-safe profile. The same wrapper is used for
+input/output and effect-response digests; `gateway.body_encoding` identifies it
+in the signed capsule. Whitespace or numeric spelling changes therefore change
+the commitment. Original bodies are not retained, including their base64 form.
+
 The sidecar shares the gateway database and initializes its own additive tables:
 
 - `agw_capsules`: exact signed capsule/envelope bytes within a JSON storage
