@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,23 @@ import (
 	"regexp"
 	"strings"
 )
+
+func configureMCP(config map[string]any, raw, sessionKey string) error {
+	mcp, err := mcpConfig(raw)
+	if err != nil {
+		return err
+	}
+	if mcp == nil {
+		return nil
+	}
+	key, err := hex.DecodeString(sessionKey)
+	if err != nil || len(key) != 32 {
+		return errors.New("SESSION_KEY must be a stable, shared 32-byte hexadecimal key when MCP is enabled")
+	}
+	config["config"].(map[string]any)["session"] = map[string]any{"key": sessionKey}
+	config["mcp"] = mcp
+	return nil
+}
 
 // The MVP exposes this single operator-owned list to every service instance.
 // Upstream authentication may be specified using static HTTP header values.

@@ -24,6 +24,7 @@ applications:
     GATEWAY_MODELS: ((gateway_models))
     MODEL_CATALOG: ((model_catalog))
     MCP_SERVERS: ((mcp_servers))
+    SESSION_KEY: ((mcp_session_key))
     CAPSULE_LOG_ID: ((installation))
     CAPSULE_SIGNING_SEED: ((capsule_signing_seed))
     CAPSULE_WITNESS_URL: ((capsule_witness_url))

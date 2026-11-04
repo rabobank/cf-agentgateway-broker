@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +14,16 @@ func TestMCPConfiguration(t *testing.T) {
 }
 
 var _ = Describe("Operator-configured MCP servers", func() {
+	It("requires a shared encryption key only when MCP is enabled", func() {
+		config := map[string]any{"config": map[string]any{}}
+		Expect(configureMCP(config, `[{"name":"shared","url":"https://tools.example/mcp"}]`, "")).NotTo(Succeed())
+		Expect(configureMCP(config, `[{"name":"shared","url":"https://tools.example/mcp"}]`, "not-hex")).NotTo(Succeed())
+		Expect(configureMCP(config, `[{"name":"shared","url":"https://tools.example/mcp"}]`, strings.Repeat("12", 16))).NotTo(Succeed())
+		Expect(configureMCP(config, `[]`, "")).To(Succeed())
+		key := strings.Repeat("12", 32)
+		Expect(configureMCP(config, `[{"name":"shared","url":"https://tools.example/mcp"}]`, key)).To(Succeed())
+		Expect(config["config"].(map[string]any)["session"]).To(Equal(map[string]any{"key": key}))
+	})
 	It("configures one global target list and fail-closed loopback recording", func() {
 		config, err := mcpConfig(`[ {"name":"shared","url":"https://tools.example/mcp"} ]`)
 		Expect(err).NotTo(HaveOccurred())

@@ -85,6 +85,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		}
 		port := free()
 		config := map[string]any{"config": map[string]any{"adminAddr": fmt.Sprintf("127.0.0.1:%d", free()), "readinessAddr": fmt.Sprintf("127.0.0.1:%d", free()), "statsAddr": fmt.Sprintf("127.0.0.1:%d", free())}, "mcp": map[string]any{"port": port, "targets": []any{map[string]any{"name": "test", "mcp": map[string]any{"host": backend.URL}}}, "policies": map[string]any{"mcpGuardrails": map[string]any{"processors": []any{map[string]any{"kind": "remote", "host": listener.Addr().String(), "failureMode": "failClosed", "methods": map[string]string{"*": "request", "tools/call": "full"}, "metadata": map[string]string{"capsule_plan": "has(mcpGuardrails.capsule_plan) ? mcpGuardrails.capsule_plan : ''"}, "requestHeaders": map[string]any{"allowed": []string{"authorization"}}}}}}}}
+		config["config"].(map[string]any)["session"] = map[string]any{"key": strings.Repeat("34", 32)}
 		data, err := json.Marshal(config)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(os.WriteFile(filepath.Join(work, "config.json"), data, 0600)).To(Succeed())
@@ -129,5 +130,19 @@ var _ = Describe("Gateway metadata round trip", func() {
 		Eventually(repo.SaveCallCount).Should(Equal(2), body)
 		_, outcome := repo.SaveArgsForCall(1)
 		Expect(outcome.Parent).To(Equal(strings.Repeat("a", 64)))
+		original := session
+		if session[0] == 'A' {
+			session = "B" + session[1:]
+		} else {
+			session = "A" + session[1:]
+		}
+		code, body, err = call(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(http.StatusNotFound), body)
+		Expect(repo.SaveCallCount()).To(Equal(2))
+		session = original
+		code, body, err = call(`{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(http.StatusOK), body)
 	}, NodeTimeout(90*time.Second))
 })

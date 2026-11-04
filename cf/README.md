@@ -47,6 +47,7 @@ Add the following secret values to `local-vars.yml`; keep that file private:
 management_token: 'REPLACE_WITH_A_RANDOM_MANAGEMENT_TOKEN'
 broker_password: 'REPLACE_WITH_A_DIFFERENT_RANDOM_BROKER_PASSWORD'
 capsule_signing_seed: 'REPLACE_WITH_A_STABLE_32_BYTE_HEX_ED25519_SEED'
+mcp_session_key: 'REPLACE_WITH_A_DIFFERENT_STABLE_32_BYTE_HEX_KEY'
 trusted_ca: '' # Empty for system trust, or replace with the PEM issuer CA
 ```
 
@@ -77,6 +78,7 @@ the existing credentials and can be used as a second vars file:
 | `model_aliases`, `usd_allowance`, `budget_window` | Broker model allowlist and per-instance USD allowance |
 | `mcp_servers` | JSON array of shared MCP servers: `name`, HTTP(S) `url`, optional literal `headers`; `[]` disables MCP |
 | `mcp_url` | Public MCP URL, including `https://` and `/mcp` |
+| `mcp_session_key` | Stable private 32-byte hexadecimal AES session key, shared across gateway replicas; required with MCP enabled |
 | `capsule_signing_seed` | Stable private 32-byte Ed25519 seed encoded as 64 hex characters; shared by gateway sidecars |
 | `capsule_witness_url`, `capsule_witness_public_key` | External witness URL and pinned hex Ed25519 public key; both empty disables delivery |
 

@@ -192,6 +192,7 @@ func (e *environment) startGateway() {
 		"DATABASE_SERVICE_NAME":      "acceptance-state",
 		"MCP_SERVERS":                jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),
 		"CAPSULE_LOG_ID":             "acceptance",
+		"SESSION_KEY":                strings.Repeat("34", 32),
 		"CAPSULE_SIGNING_SEED":       strings.Repeat("12", 32),
 		"CAPSULE_CHECKPOINT_ENTRIES": "1",
 		"VCAP_SERVICES":              jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}),

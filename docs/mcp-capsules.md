@@ -72,6 +72,11 @@ Measure this before selecting production retention/rotation and capacity limits.
 
 ## Operator settings
 
+- `mcp_session_key`: stable private 32-byte hexadecimal AES-256-GCM key, separate
+  from the capsule signing seed and shared across gateway replicas. The launcher
+  refuses to enable MCP without a valid `SESSION_KEY`. This authenticates resumed
+  session state; changing the key invalidates existing sessions.
+
 - `capsule_signing_seed`: required 64-hex-character Ed25519 seed, stored privately.
   Keep the same seed across replicas and restarts. Rotation requires coordinated
   trusted-key/checkpoint handling; replacing it without that fails verification.

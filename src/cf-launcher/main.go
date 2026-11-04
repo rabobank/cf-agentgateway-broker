@@ -109,12 +109,8 @@ func run(mode string) error {
 			"llm":      map[string]any{"gateways": []string{"inference"}, "models": models, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{}}, "authorization": map[string]any{"rules": []string{`(request.method == "GET" && request.path == "/v1/models") || (request.method == "POST" && request.path == "/v1/chat/completions")`}}}},
 			"ui":       map[string]any{"gateways": []string{"management"}, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{map[string]any{"key": required("MANAGEMENT_TOKEN")}}}}},
 		}
-		mcp, err := mcpConfig(os.Getenv("MCP_SERVERS"))
-		if err != nil {
+		if err := configureMCP(config.(map[string]any), os.Getenv("MCP_SERVERS"), os.Getenv("SESSION_KEY")); err != nil {
 			return err
-		}
-		if mcp != nil {
-			config.(map[string]any)["mcp"] = mcp
 		}
 		binary = "bin/agentgateway"
 		args = []string{"agentgateway", "-f", "config/runtime.json"}
