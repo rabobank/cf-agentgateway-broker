@@ -432,15 +432,17 @@ func (s *Store) mutate(ctx context.Context, change func(*memory.Store) error) er
 			return err
 		}
 	}
+	type witnessKey struct {
+		id   string
+		size uint64
+	}
+	previousWitnesses := make(map[witnessKey]*cll.WitnessState, len(state.Witnesses))
+	for i := range state.Witnesses {
+		w := &state.Witnesses[i]
+		previousWitnesses[witnessKey{w.WitnessID, w.CheckpointSize}] = w
+	}
 	for _, w := range next.Witnesses {
-		var old *cll.WitnessState
-		for i := range state.Witnesses {
-			v := &state.Witnesses[i]
-			if v.WitnessID == w.WitnessID && v.CheckpointSize == w.CheckpointSize {
-				old = v
-				break
-			}
-		}
+		old := previousWitnesses[witnessKey{w.WitnessID, w.CheckpointSize}]
 		raw, e := json.Marshal(w)
 		if e != nil {
 			return e
