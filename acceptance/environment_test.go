@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ type environment struct {
 	brokerPort    int
 	gatewayPort   int
 	providerCalls atomic.Int64
+	mcpURL        string
 }
 
 func startEnvironment() *environment {
@@ -55,6 +57,7 @@ func startEnvironment() *environment {
 	e := &environment{root: root, work: work}
 	e.startPostgres()
 	e.startProvider()
+	e.startMCP()
 	e.startGateway()
 	e.startBroker()
 	return e
@@ -150,7 +153,11 @@ func (e *environment) startContainer(role string, env map[string]string) {
 	for key, value := range env {
 		args = append(args, "--env", key+"="+value)
 	}
-	args = append(args, stackImage, "./bin/launcher")
+	if role == "gateway" {
+		args = append(args, stackImage, "sh", "-c", "./bin/capsule-extmcp & exec ./bin/launcher")
+	} else {
+		args = append(args, stackImage, "./bin/launcher")
+	}
 	command := exec.Command("docker", args...)
 	session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
 	Expect(err).NotTo(HaveOccurred())
@@ -182,8 +189,13 @@ func (e *environment) startGateway() {
 	e.startContainer("gateway", map[string]string{
 		"APP_ROLE": "gateway", "PORT": strconv.Itoa(e.gatewayPort),
 		"MANAGEMENT_TOKEN": managementToken, "GATEWAY_MODELS": jsonString(models), "MODEL_CATALOG": jsonString(catalog),
-		"DATABASE_SERVICE_NAME": "acceptance-state",
-		"VCAP_SERVICES":         jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}),
+		"DATABASE_SERVICE_NAME":      "acceptance-state",
+		"MCP_SERVERS":                jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),
+		"CAPSULE_LOG_ID":             "acceptance",
+		"SESSION_KEY":                strings.Repeat("34", 32),
+		"CAPSULE_SIGNING_SEED":       strings.Repeat("12", 32),
+		"CAPSULE_CHECKPOINT_ENTRIES": "1",
+		"VCAP_SERVICES":              jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}),
 	})
 	Eventually(func() int {
 		return status(http.MethodGet, "http://127.0.0.1:9090/api/runtime", "", managementToken, false)
@@ -198,6 +210,8 @@ func (e *environment) startBroker() {
 		"INSTALLATION": "acceptance", "MANAGEMENT_URL": "http://127.0.0.1:9090", "MANAGEMENT_TOKEN": managementToken,
 		"GATEWAY_URL": fmt.Sprintf("http://127.0.0.1:%d/v1", e.gatewayPort), "MODEL_ALIASES": model,
 		"USD_ALLOWANCE": "20", "BUDGET_WINDOW": "24h",
+		"MCP_SERVERS": jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),
+		"MCP_URL":     fmt.Sprintf("http://127.0.0.1:%d/mcp", e.gatewayPort),
 	})
 	Eventually(func() int {
 		return status(http.MethodGet, e.brokerURL()+"/ready", "", "", false)
@@ -205,3 +219,43 @@ func (e *environment) startBroker() {
 }
 
 func (e *environment) brokerURL() string { return fmt.Sprintf("http://127.0.0.1:%d", e.brokerPort) }
+
+func (e *environment) startMCP() {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		if r.Header.Get("Authorization") != "" {
+			http.Error(w, "gateway credential leaked upstream", http.StatusForbidden)
+			return
+		}
+		var msg struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
+		}
+		if json.NewDecoder(r.Body).Decode(&msg) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		var result any
+		switch msg.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2025-03-26", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "fixture", "version": "1"}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "echo", "inputSchema": map[string]any{"type": "object"}}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": "capsule works"}}}
+		default:
+			w.WriteHeader(202)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
+	}))
+	DeferCleanup(server.Close)
+	e.mcpURL = server.URL
+}

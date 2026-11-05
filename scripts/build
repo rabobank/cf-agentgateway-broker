@@ -11,6 +11,9 @@ pushd src/cf-launcher >/dev/null
 CGO_ENABLED=0 go build -trimpath -o ../../cf/dist/broker/bin/launcher .
 popd >/dev/null
 cp cf/dist/broker/bin/launcher cf/dist/gateway/bin/launcher
+pushd src/capsule-extmcp >/dev/null
+GOTOOLCHAIN=go1.27.0 CGO_ENABLED=0 go build -trimpath -o ../../cf/dist/gateway/bin/capsule-extmcp .
+popd >/dev/null
 docker run --rm --network none -v "$(pwd)/src:/src" -v "$(pwd)/cf/dist/gateway:/out" \
   -e VERSION="$AGENTGATEWAY_VERSION" -e GIT_REVISION="$AGENTGATEWAY_REVISION" -e RUSTUP_TOOLCHAIN="$RUST_VERSION" "$RUST_IMAGE" bash -ec '
   cd /src/agentgateway

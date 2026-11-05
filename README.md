@@ -8,6 +8,8 @@ headless [agentgateway](https://agentgateway.dev/) deployed as Cloud Foundry app
 - `agentgateway`: horizontally scalable inference app, initially two instances.
 - `agentgateway-broker`: stateless OSB app using the private gateway API.
 - `agentgateway-state`: PostgreSQL service instance for configuration and usage.
+- `capsule-extmcp`: Go sidecar per gateway for shared MCP authentication and
+  service-instance-aware capsules with a PostgreSQL-backed checkpointed log.
 
 CF routes terminate TLS and distribute inference connections. Private container
 network policies restrict access to gateway management. App bindings and service keys receive `url`, `api_key`, and PEM
@@ -56,6 +58,8 @@ lab's private values and is ignored by Git.
 
 See [deployment instructions](cf/README.md), [lab validation results](cf/verification.md),
 [architecture](docs/architecture.md), and [source findings](docs/source-investigation.md).
+Shared operator-configured MCP servers and capsule recording are described in
+[MCP and capsules](docs/mcp-capsules.md).
 
 Choose a PostgreSQL service with persistence and backup capabilities appropriate
 for your deployment. The validation environment uses an ephemeral development plan;

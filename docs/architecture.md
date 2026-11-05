@@ -12,6 +12,14 @@ CF consumers -> CF HTTPS route -> agentgateway replicas
                                  PostgreSQL service
 
 agentgateway replicas -> operator-configured model providers
+
+CF MCP consumers -> gateway /mcp -> operator-configured shared MCP servers
+                         |
+                 loopback Go CF sidecar
+                         |
+          capsules + shared CLL in PostgreSQL
+                         |
+           elected worker -> external witness
 ```
 
 The gateway's API resources are authoritative. The broker manages them through the
@@ -56,3 +64,5 @@ runtime configuration from environment settings and PostgreSQL VCAP_SERVICES.
 Gorouter terminates public TLS; bindings supply its issuer CA to consumers.
 
 See [deployment](../cf/README.md) and [source findings](source-investigation.md).
+See [MCP and capsules](mcp-capsules.md) for global MCP settings, service-instance
+attribution, transactional recording, and PostgreSQL-elected checkpoint workers.

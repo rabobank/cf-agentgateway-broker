@@ -42,6 +42,21 @@ jobs:
       - name: Build application binaries
         run: devbox run build
 
+      # Image download/extraction is setup, not part of gateway readiness.
+      - name: Prepare acceptance runtime image
+        timeout-minutes: 5
+        run: docker pull ghcr.io/cloudfoundry/k8s/cflinuxfs5:latest
+
+      - name: Run unit and PostgreSQL contract tests
+        env:
+          TEST_REPORT_DIR: ${{ runner.temp }}/acceptance-reports/capsules
+        run: devbox run test
+
+      - name: Verify generated Counterfeiter fakes
+        run: |
+          devbox run -- env GOTOOLCHAIN=go1.27.0 go -C src/capsule-extmcp generate ./plugin
+          git diff --exit-code -- src/capsule-extmcp/plugin/pluginfakes
+
       # The gateway launcher uses fixed management ports, so this suite must
       # run serially rather than using Ginkgo's parallel processes.
       - name: Run acceptance tests

@@ -19,6 +19,10 @@ gateway_url: https://agentgateway.10.246.0.21.sslip.io/v1
 model_aliases: deepseek-v4-flash
 usd_allowance: '10'
 budget_window: 24h
+mcp_servers: '[]'
+mcp_url: https://agentgateway.10.246.0.21.sslip.io/mcp
+capsule_witness_url: ''
+capsule_witness_public_key: ''
 gateway_models: >-
   [{"name":"deepseek-v4-flash","provider":"openAI","params":{"model":"deepseek-v4-flash","baseUrl":"http://192.168.2.148:8000/v1"}}]
 model_catalog: >-
