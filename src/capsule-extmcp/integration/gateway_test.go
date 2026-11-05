@@ -28,6 +28,17 @@ func TestGateway(t *testing.T) {
 	RunSpecs(t, "Pinned gateway ExtMcp integration")
 }
 
+const runtimeImage = "ghcr.io/cloudfoundry/k8s/cflinuxfs5:latest"
+
+var _ = BeforeSuite(func(ctx SpecContext) {
+	if err := exec.CommandContext(ctx, "docker", "image", "inspect", runtimeImage).Run(); err == nil {
+		return
+	}
+	pull := exec.CommandContext(ctx, "docker", "pull", runtimeImage)
+	pull.Stdout, pull.Stderr = GinkgoWriter, GinkgoWriter
+	Expect(pull.Run()).To(Succeed(), "prepare runtime image before gateway readiness checks")
+}, NodeTimeout(4*time.Minute))
+
 var _ = Describe("Gateway metadata round trip", func() {
 	It("authenticates and returns the planned capsule ID on the response hook", func(ctx SpecContext) {
 		root, err := filepath.Abs("../../..")
@@ -90,7 +101,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(os.WriteFile(filepath.Join(work, "config.json"), data, 0600)).To(Succeed())
 		name := fmt.Sprintf("capsule-test-%d", time.Now().UnixNano())
-		cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", name, "--network", "host", "-v", filepath.Join(root, "cf/dist/gateway")+":/gateway:ro", "-v", work+":/work:ro", "-e", "LD_LIBRARY_PATH=/gateway/lib", "ghcr.io/cloudfoundry/k8s/cflinuxfs5:latest", "/gateway/bin/agentgateway", "-f", "/work/config.json")
+		cmd := exec.CommandContext(ctx, "docker", "run", "--pull=never", "--rm", "--name", name, "--network", "host", "-v", filepath.Join(root, "cf/dist/gateway")+":/gateway:ro", "-v", work+":/work:ro", "-e", "LD_LIBRARY_PATH=/gateway/lib", runtimeImage, "/gateway/bin/agentgateway", "-f", "/work/config.json")
 		cmd.Stdout = GinkgoWriter
 		cmd.Stderr = GinkgoWriter
 		Expect(cmd.Start()).To(Succeed())

@@ -42,6 +42,11 @@ jobs:
       - name: Build application binaries
         run: devbox run build
 
+      # Image download/extraction is setup, not part of gateway readiness.
+      - name: Prepare acceptance runtime image
+        timeout-minutes: 5
+        run: docker pull ghcr.io/cloudfoundry/k8s/cflinuxfs5:latest
+
       - name: Run unit and PostgreSQL contract tests
         env:
           TEST_REPORT_DIR: ${{ runner.temp }}/acceptance-reports/capsules
