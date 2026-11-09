@@ -1,6 +1,7 @@
 package main
 
 import (
+	mcpconfig "cf-mcp-config"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,11 +30,7 @@ func configureMCP(config map[string]any, raw, sessionKey string) error {
 
 // The MVP exposes this single operator-owned list to every service instance.
 // Upstream authentication may be specified using static HTTP header values.
-type mcpServer struct {
-	Name    string            `json:"name"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
-}
+type mcpServer = mcpconfig.Backend
 
 func mcpConfig(raw string) (map[string]any, error) {
 	if raw == "" {
@@ -49,9 +46,16 @@ func mcpConfig(raw string) (map[string]any, error) {
 	if len(servers) == 0 {
 		return nil, nil
 	}
+	if err := mcpconfig.Validate(servers, ""); err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	targets := []any{}
 	for _, server := range servers {
+		// Plan-owned backends are exposed only by broker-created binding routes.
+		if server.PlanID != "" {
+			continue
+		}
 		u, err := url.Parse(server.URL)
 		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`).MatchString(server.Name) || seen[server.Name] || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" {
 			return nil, errors.New("invalid or duplicate MCP server")

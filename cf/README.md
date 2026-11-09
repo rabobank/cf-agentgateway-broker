@@ -76,7 +76,7 @@ the existing credentials and can be used as a second vars file:
 | `trusted_ca` | PEM CA for the public inference route, or an empty string |
 | `gateway_models`, `model_catalog` | JSON strings for provider models and their pricing |
 | `model_aliases`, `usd_allowance`, `budget_window` | Broker model allowlist and per-instance USD allowance |
-| `mcp_servers` | JSON array of shared MCP servers: `name`, HTTP(S) `url`, optional literal `headers`; `[]` disables MCP |
+| `mcp_servers` | JSON array of MCP backends; legacy entries use `name`, HTTP(S) `url`, optional literal `headers`; plan entries additionally configure stable `plan_id` and `auth`; see [federation](../docs/mcp-federation.md) |
 | `mcp_url` | Public MCP URL, including `https://` and `/mcp` |
 | `mcp_session_key` | Stable private 32-byte hexadecimal AES session key, shared across gateway replicas; required with MCP enabled |
 | `capsule_signing_seed` | Stable private 32-byte Ed25519 seed encoded as 64 hex characters; shared by gateway sidecars |

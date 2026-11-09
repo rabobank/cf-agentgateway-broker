@@ -1,5 +1,10 @@
 # Shared MCP and checkpointed capsules
 
+For per-backend service plans, service-account JWT authorization, federated
+client-credentials exchange, and selected-identity capsules, see
+[MCP federation](mcp-federation.md). The global-list behavior below applies to
+legacy entries without `plan_id`.
+
 Operators configure `mcp_servers` once for the deployment. Every service instance
 can access every configured server; per-instance server selection is not part of
 the MVP. Each entry has `name`, HTTP(S) `url`, and optional static `headers`.

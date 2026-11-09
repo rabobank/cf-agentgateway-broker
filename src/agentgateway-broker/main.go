@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	mcpconfig "cf-mcp-config"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -31,23 +32,25 @@ import (
 const labelPrefix = "cf.agentgateway-broker/"
 
 type Config struct {
-	Listen          string      `json:"listen"`
-	Username        string      `json:"username"`
-	Password        string      `json:"password"`
-	Installation    string      `json:"installation"`
-	GatewayURL      string      `json:"gateway_url"`
-	MCPURL          string      `json:"mcp_url"`
-	ManagementURL   string      `json:"management_url"`
-	ManagementToken string      `json:"management_token"`
-	CAFile          string      `json:"ca_file"`
-	TrustedCAFile   string      `json:"trusted_ca_file"`
-	Certificate     string      `json:"certificate"`
-	PrivateKey      string      `json:"private_key"`
-	ServiceID       string      `json:"service_id"`
-	PlanID          string      `json:"plan_id"`
-	Models          []string    `json:"models"`
-	Budget          json.Number `json:"budget"`
-	Window          string      `json:"window"`
+	Listen          string              `json:"listen"`
+	Username        string              `json:"username"`
+	Password        string              `json:"password"`
+	Installation    string              `json:"installation"`
+	GatewayURL      string              `json:"gateway_url"`
+	MCPURL          string              `json:"mcp_url"`
+	ManagementURL   string              `json:"management_url"`
+	ManagementToken string              `json:"management_token"`
+	CAFile          string              `json:"ca_file"`
+	TrustedCAFile   string              `json:"trusted_ca_file"`
+	Certificate     string              `json:"certificate"`
+	PrivateKey      string              `json:"private_key"`
+	ServiceID       string              `json:"service_id"`
+	PlanID          string              `json:"plan_id"`
+	Models          []string            `json:"models"`
+	Budget          json.Number         `json:"budget"`
+	Window          string              `json:"window"`
+	MCPServers      []mcpconfig.Backend `json:"mcp_servers,omitempty"`
+	DatabaseURL     string              `json:"database_url,omitempty"`
 }
 
 type Resource struct {
@@ -83,6 +86,7 @@ type Broker struct {
 	cfg       Config
 	client    *http.Client
 	trustedCA string
+	state     *mcpState
 }
 type apiError struct {
 	status  int
@@ -94,6 +98,12 @@ func (e *apiError) Error() string { return e.message }
 var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func (c Config) validate() error {
+	if err := mcpconfig.Validate(c.MCPServers, c.PlanID); err != nil {
+		return err
+	}
+	if len(c.MCPServers) > 0 && c.MCPURL == "" {
+		return errors.New("MCP URL required with MCP servers")
+	}
 	if c.MCPURL != "" {
 		u, err := url.Parse(c.MCPURL)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
@@ -163,6 +173,9 @@ func newBroker(c Config) (*Broker, error) {
 	return &Broker{cfg: c, client: &http.Client{Timeout: 15 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, trustedCA: trustedCA}, nil
 }
 func (b *Broker) gateway(ctx context.Context, method, path string, body any, out any) error {
+	return b.management(ctx, method, "llm.apiKey", path, body, out)
+}
+func (b *Broker) management(ctx context.Context, method, kind, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -171,7 +184,7 @@ func (b *Broker) gateway(ctx context.Context, method, path string, body any, out
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(b.cfg.ManagementURL, "/")+"/api/config/resources/llm.apiKey"+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(b.cfg.ManagementURL, "/")+"/api/config/resources/"+kind+path, reader)
 	if err != nil {
 		return err
 	}
@@ -272,6 +285,20 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(parts) < 3 || parts[0] != "v2" || parts[1] != "service_instances" || !resourceID.MatchString(parts[2]) {
 		fail(w, 404, "not found")
 		return
+	}
+	if b.serveMCP(w, r, parts) {
+		return
+	}
+	if b.state != nil && (r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch) {
+		var exists bool
+		if err := b.state.pool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM agw_mcp_instances WHERE installation=$1 AND id=$2)", b.cfg.Installation, parts[2]).Scan(&exists); err != nil {
+			fail(w, 503, "cannot resolve instance ownership")
+			return
+		}
+		if exists {
+			fail(w, 409, "instance belongs to another service plan")
+			return
+		}
 	}
 	id := parts[2]
 	var req Request
@@ -378,10 +405,16 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	write(w, 201, map[string]any{})
 }
 func (b *Broker) catalog(w http.ResponseWriter) {
-	write(w, 200, map[string]any{"services": []any{map[string]any{
+	service := map[string]any{
 		"id": b.cfg.ServiceID, "name": "agentgateway", "description": "OpenAI-compatible inference with a shared service-instance spend allowance", "bindable": true, "plan_updateable": false, "instances_retrievable": false, "bindings_retrievable": false,
 		"plans": []any{map[string]any{"id": b.cfg.PlanID, "name": "shared", "description": "Shared API key, model allowlist and best-effort USD allowance", "free": true, "metadata": map[string]any{"models": b.cfg.Models, "usd_allowance": b.cfg.Budget, "window": b.cfg.Window, "accounting": "Post-response, epoch-aligned windows; concurrent requests and replica synchronization can overshoot. Unbind does not revoke the shared key."}}},
-	}}})
+	}
+	for _, backend := range b.cfg.MCPServers {
+		if backend.PlanID != "" {
+			service["plans"] = append(service["plans"].([]any), map[string]any{"id": backend.PlanID, "name": backend.Name, "description": backend.Description, "free": true, "metadata": map[string]any{"protocol": "mcp", "auth_method": backend.Auth.Method}})
+		}
+	}
+	write(w, 200, map[string]any{"services": []any{service}})
 }
 func main() {
 	path := flag.String("config", "", "JSON configuration file")
@@ -401,6 +434,18 @@ func main() {
 	b, err := newBroker(cfg)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if cfg.DatabaseURL != "" {
+		b.state, err = openMCPState(context.Background(), cfg.DatabaseURL, cfg.Installation)
+		if err != nil {
+			log.Fatal("cannot initialize MCP state: ", err)
+		}
+		defer b.state.pool.Close()
+	}
+	for _, backend := range cfg.MCPServers {
+		if backend.PlanID != "" && b.state == nil {
+			log.Fatal("database_url required for MCP plans")
+		}
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

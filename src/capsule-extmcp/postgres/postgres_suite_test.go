@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"cf-agentgateway-capsule/plugin"
 	"cf-agentgateway-capsule/postgres"
+	mcpconfig "cf-mcp-config"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -108,6 +109,34 @@ var _ = Describe("Durable ledger", func() {
 		pending, err := store.PendingWitnesses(context.Background(), time.Now().UTC(), 10)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(HaveLen(1))
+	})
+	It("authorizes only the live binding account and denies tombstoned instances and bindings", func() {
+		ctx := context.Background()
+		_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS agw_mcp_instances (installation text NOT NULL,id text NOT NULL,value jsonb NOT NULL,PRIMARY KEY(installation,id)); CREATE TABLE IF NOT EXISTS agw_mcp_bindings (installation text NOT NULL,instance_id text NOT NULL,id text NOT NULL,value jsonb NOT NULL,PRIMARY KEY(installation,instance_id,id),FOREIGN KEY(installation,instance_id) REFERENCES agw_mcp_instances(installation,id) ON DELETE CASCADE)`)
+		Expect(err).NotTo(HaveOccurred())
+		grant := mcpconfig.Binding{ID: "binding", Instance: mcpconfig.Instance{ID: "instance", Installation: logID, Backend: mcpconfig.Backend{Name: "tools", Auth: mcpconfig.Auth{Method: "passthrough"}}}, Account: mcpconfig.Account{Issuer: "https://issuer.test", Subject: "account"}}
+		instance, _ := json.Marshal(grant.Instance)
+		binding, _ := json.Marshal(grant)
+		_, err = pool.Exec(ctx, "INSERT INTO agw_mcp_instances VALUES($1,$2,$3)", logID, "instance", instance)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { pool.Exec(ctx, "DELETE FROM agw_mcp_instances WHERE installation=$1", logID) })
+		_, err = pool.Exec(ctx, "INSERT INTO agw_mcp_bindings VALUES($1,$2,$3,$4)", logID, "instance", "binding", binding)
+		Expect(err).NotTo(HaveOccurred())
+		identity, err := store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(identity.SelectedIdentity.BackendID).To(Equal("tools"))
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "wrong-account")
+		Expect(err).To(HaveOccurred())
+		_, err = pool.Exec(ctx, `UPDATE agw_mcp_bindings SET value=jsonb_set(value,'{revoked}','true') WHERE installation=$1`, logID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred())
+		_, err = pool.Exec(ctx, `UPDATE agw_mcp_bindings SET value=jsonb_set(value,'{revoked}','false') WHERE installation=$1`, logID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = pool.Exec(ctx, `UPDATE agw_mcp_instances SET value=jsonb_set(value,'{revoked}','true') WHERE installation=$1`, logID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred())
 	})
 	It("does not persist anything when evidence verification fails", func() {
 		Expect(store.Save(context.Background(), plugin.Capsule{ID: "invalid", Bytes: []byte(`{}`)})).NotTo(Succeed())

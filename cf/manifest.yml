@@ -19,6 +19,7 @@ applications:
   services: [((database_service_name))]
   env:
     APP_ROLE: gateway
+    RUST_MIN_STACK: "16777216"
     DATABASE_SERVICE_NAME: ((database_service_name))
     MANAGEMENT_TOKEN: ((management_token))
     GATEWAY_MODELS: ((gateway_models))
@@ -39,8 +40,10 @@ applications:
   instances: ((broker_instances))
   routes:
   - route: ((broker_route))
+  services: [((database_service_name))]
   env:
     APP_ROLE: broker
+    DATABASE_SERVICE_NAME: ((database_service_name))
     BROKER_PASSWORD: ((broker_password))
     INSTALLATION: ((installation))
     MANAGEMENT_URL: ((management_url))
