@@ -5,6 +5,7 @@ import (
 	"cf-agentgateway-capsule/plugin/pluginfakes"
 	"context"
 	"errors"
+	"encoding/json"
 	emit "github.com/action-state-group/capsule-emit/go"
 	api "github.com/agentgateway/agentgateway/api"
 	. "github.com/onsi/ginkgo/v2"
@@ -36,6 +37,18 @@ var _ = Describe("ExtMcp", func() {
 		_, record := repo.SaveArgsForCall(0)
 		Expect(record.Identity).To(Equal(identity))
 		Expect(record.Phase).To(Equal("planned"))
+	})
+	It("preserves selected backend identity in the plan without claiming authentication", func() {
+		var selected plugin.Identity
+		Expect(json.Unmarshal([]byte(`{"installation":"test","service_instance_id":"instance-a","selected_identity":{"backend_id":"echo","auth_method":"static","identity_reference":"operator-tools"}}`), &selected)).To(Succeed())
+		repo.AuthenticateReturns(selected, nil)
+		_, err := server.CheckRequest(context.Background(), request)
+		Expect(err).NotTo(HaveOccurred())
+		_, record := repo.SaveArgsForCall(0)
+		data, err := json.Marshal(record.Identity)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(ContainSubstring(`"selected_identity"`))
+		Expect(string(data)).To(ContainSubstring(`"identity_reference":"operator-tools"`))
 	})
 	It("authenticates discovery without recording capsules", func() {
 		request.Method = "tools/list"
