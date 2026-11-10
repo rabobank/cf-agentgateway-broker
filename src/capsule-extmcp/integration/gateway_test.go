@@ -139,7 +139,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		route := binding.Route()
 		pol := route["policies"].(map[string]any)
 		selected := binding.Selected()
-		identity := plugin.Identity{Installation: "lab", Instance: "instance", Binding: "binding", Target: binding.RouteName(), Account: &binding.Account, SelectedIdentity: &selected}
+		identity := plugin.Identity{Installation: "lab", Instance: "instance", Binding: "binding", Target: binding.TargetName(), Account: &binding.Account, SelectedIdentity: &selected}
 		grant := &bindingGrant{active: true, identity: identity}
 		authz := httptest.NewServer(plugin.BindingAuthHandler(grant))
 		DeferCleanup(authz.Close)
@@ -149,7 +149,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		repo := &pluginfakes.FakeRepository{}
 		producer := &pluginfakes.FakeProducer{}
 		producer.SealReturns(emit.Result{CapsuleID: strings.Repeat("b", 64), Payload: []byte(`{}`), Envelope: []byte("signed")}, nil)
-		repo.GetReturns(plugin.Capsule{ID: strings.Repeat("b", 64), Identity: identity, Phase: "planned", Backends: []string{binding.RouteName()}, Tool: "echo"}, nil)
+		repo.GetReturns(plugin.Capsule{ID: strings.Repeat("b", 64), Identity: identity, Phase: "planned", Backends: []string{binding.TargetName()}, Tool: "echo"}, nil)
 		grpcServer := grpc.NewServer()
 		api.RegisterExtMcpServer(grpcServer, plugin.NewServer(repo, producer))
 		go grpcServer.Serve(listener)

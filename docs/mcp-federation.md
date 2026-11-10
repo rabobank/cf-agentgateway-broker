@@ -85,7 +85,13 @@ instance parameters and backend snapshots. Instance operations are serialized by
 PostgreSQL advisory session locks, retained across grant commit and route cleanup.
 Gateway routes are written through the
 management API and persisted in its normal config store. Bind writes a route
-before committing its grant, so pre-commit requests fail closed. Unbind and
+before committing its grant, so pre-commit requests fail closed. Route resource
+IDs depend only on installation, instance ID and binding ID; target names also
+include the random instance/binding generations. A retry after a lost management
+response or failed grant commit overwrites the same route instead of creating a
+competing route for the binding URL. Orphan unbind can derive the route ID and
+delete it even if no grant was committed or the instance is already absent.
+Unbind and
 deprovision commit revoked tombstones before route cleanup; retries finish cleanup
 without reauthorizing the identity. No cross-store atomic transaction is claimed.
 Back up these grant tables with gateway/capsule state.

@@ -208,6 +208,14 @@ func (b Backend) Endpoint(params map[string]string) string {
 	return endpoint
 }
 func (b Binding) RouteName() string {
+	data, _ := json.Marshal([]string{b.Instance.Installation, b.Instance.ID, b.ID})
+	digest := sha256.Sum256(data)
+	return "cf-mcp-route-" + hex.EncodeToString(digest[:])
+}
+
+// TargetName remains generation-specific so replacing a stable route cannot
+// authorize an old route generation or resume an earlier binding's MCP session.
+func (b Binding) TargetName() string {
 	data, _ := json.Marshal([]string{b.Instance.Installation, b.Instance.ID, b.ID, b.Instance.Generation, b.Generation})
 	digest := sha256.Sum256(data)
 	return "cf-mcp-" + hex.EncodeToString(digest[:])
@@ -238,12 +246,12 @@ func (b Binding) Route() map[string]any {
 		}}
 	}
 	quote := func(s string) string { v, _ := json.Marshal(s); return string(v) }
-	body := `{"binding_id":` + quote(b.ID) + `,"instance_id":` + quote(b.Instance.ID) + `,"target":` + quote(b.RouteName()) + `,"issuer":jwt.iss,"subject":jwt.sub}`
+	body := `{"binding_id":` + quote(b.ID) + `,"instance_id":` + quote(b.Instance.ID) + `,"target":` + quote(b.TargetName()) + `,"issuer":jwt.iss,"subject":jwt.sub}`
 	policies := map[string]any{
 		"jwtAuth":       map[string]any{"mode": "strict", "preserveToken": true, "issuer": b.Account.Issuer, "audiences": []string{backend.Auth.Audience}, "jwks": map[string]any{"url": backend.Auth.JWKSURL}, "jwtValidationOptions": map[string]any{"requiredClaims": []string{"exp", "sub", "iss", "aud"}}},
 		"authorization": map[string]any{"rules": []string{"jwt.sub == " + quote(b.Account.Subject)}},
 		"extAuthz":      map[string]any{"host": "127.0.0.1:50052", "failureMode": "deny", "protocol": map[string]any{"http": map[string]any{"path": "'/authorize-binding'", "body": body, "metadata": map[string]string{"binding": "json(response.body)"}}}},
 		"mcpGuardrails": map[string]any{"processors": []any{map[string]any{"kind": "remote", "host": "127.0.0.1:50051", "failureMode": "failClosed", "methods": map[string]string{"tools/call": "full"}, "metadata": map[string]string{"binding": "extauthz.binding", "capsule_plan": "has(mcpGuardrails.capsule_plan) ? mcpGuardrails.capsule_plan : ''"}}}},
 	}
-	return map[string]any{"name": b.RouteName(), "gateways": []string{"inference"}, "matches": []any{map[string]any{"path": map[string]any{"exact": b.Path()}}}, "policies": policies, "backends": []any{map[string]any{"mcp": map[string]any{"targets": []any{map[string]any{"name": b.RouteName(), "mcp": map[string]string{"host": backend.URL}, "policies": targetPolicies}}}}}}
+	return map[string]any{"name": b.RouteName(), "gateways": []string{"inference"}, "matches": []any{map[string]any{"path": map[string]any{"exact": b.Path()}}}, "policies": policies, "backends": []any{map[string]any{"mcp": map[string]any{"targets": []any{map[string]any{"name": b.TargetName(), "mcp": map[string]string{"host": backend.URL}, "policies": targetPolicies}}}}}}
 }

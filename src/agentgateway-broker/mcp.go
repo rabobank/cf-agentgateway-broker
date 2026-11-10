@@ -234,6 +234,13 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 	}
 	if len(raw) == 0 {
 		if r.Method == http.MethodDelete {
+			// Orphan mitigation may arrive after an uncertain route write, before
+			// any grant (or after the instance) was persisted. IDs suffice to clean up.
+			orphan := mcpconfig.Binding{ID: parts[4], Instance: mcpconfig.Instance{ID: parts[2], Installation: b.cfg.Installation}}
+			if b.deleteRoute(ctx, orphan) != nil {
+				fail(w, 503, "cannot clean up orphan binding route")
+				return true
+			}
 			write(w, 410, map[string]any{})
 		} else {
 			fail(w, 404, "instance not found")
@@ -248,6 +255,10 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 	if r.Method == http.MethodDelete {
 		err := tx.QueryRow(ctx, "SELECT value FROM agw_mcp_bindings WHERE installation=$1 AND instance_id=$2 AND id=$3", b.cfg.Installation, instance.ID, binding.ID).Scan(&raw)
 		if errors.Is(err, pgx.ErrNoRows) {
+			if b.deleteRoute(ctx, binding) != nil {
+				fail(w, 503, "cannot clean up orphan binding route")
+				return true
+			}
 			write(w, 410, map[string]any{})
 			return true
 		}
