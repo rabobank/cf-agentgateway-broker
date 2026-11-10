@@ -46,6 +46,7 @@ func TestMCPPersistentBindingLifecycle(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var failDelete bool
+	var losePutResponses int
 	routes := map[string]json.RawMessage{}
 	management := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -61,6 +62,14 @@ func TestMCPPersistentBindingLifecycle(t *testing.T) {
 			}
 			delete(routes, strings.TrimPrefix(r.URL.Path, "/api/config/resources/traffic.route/"))
 			write(w, 200, map[string]any{})
+			return
+		}
+		if r.Method == "GET" {
+			var resources []any
+			for name, value := range routes {
+				resources = append(resources, map[string]any{"id": name, "value": value})
+			}
+			write(w, 200, map[string]any{"resources": resources})
 			return
 		}
 		var body struct {
@@ -79,6 +88,16 @@ func TestMCPPersistentBindingLifecycle(t *testing.T) {
 			json.Unmarshal(v.Value, &route)
 			routes[route.Name] = v.Value
 		}
+		if losePutResponses > 0 {
+			losePutResponses--
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack management response: %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
 		write(w, 200, map[string]any{})
 	}))
 	defer management.Close()
@@ -93,6 +112,105 @@ func TestMCPPersistentBindingLifecycle(t *testing.T) {
 		t.Fatalf("retry: %s", w.Body)
 	}
 	bind := `{"service_id":"service","plan_id":"work-plan","bind_resource":{"app_guid":"app"},"context":{"platform":"cloudfoundry","service_account":{"issuer":"https://uaa.test/oauth/token","subject":"cf:service-account:team:worker"}}}`
+	t.Run("lost route response is repaired by retry without a duplicate route", func(t *testing.T) {
+		mu.Lock()
+		losePutResponses = 1
+		mu.Unlock()
+		path := "/v2/service_instances/one/service_bindings/lost-response"
+		w := call(b, "PUT", path, bind)
+		if w.Code != 503 {
+			t.Fatalf("expected uncertain route write: %d %s", w.Code, w.Body)
+		}
+		var count int
+		if err := state.pool.QueryRow(context.Background(), "SELECT count(*) FROM agw_mcp_bindings WHERE id='lost-response'").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("unexpected grant after lost response: %d %v", count, err)
+		}
+		mu.Lock()
+		var original json.RawMessage
+		for _, value := range routes {
+			original = append(json.RawMessage(nil), value...)
+		}
+		mu.Unlock()
+		w = call(b, "PUT", path, bind)
+		if w.Code != 201 {
+			t.Fatalf("retry: %d %s", w.Code, w.Body)
+		}
+		mu.Lock()
+		if len(routes) != 1 {
+			t.Errorf("retry left %d competing routes for one binding URL", len(routes))
+		}
+		for _, value := range routes {
+			if string(value) == string(original) {
+				t.Error("retry reused the uncommitted target generation")
+			}
+		}
+		mu.Unlock()
+		w = call(b, "DELETE", path+"?service_id=service&plan_id=work-plan", "")
+		if w.Code != 200 {
+			t.Fatalf("cleanup after retry: %d %s", w.Code, w.Body)
+		}
+		mu.Lock()
+		if len(routes) != 0 {
+			t.Errorf("cleanup left %d routes", len(routes))
+		}
+		clear(routes)
+		mu.Unlock()
+	})
+	t.Run("orphan mitigation deletes a route without a committed grant", func(t *testing.T) {
+		mu.Lock()
+		losePutResponses = 1
+		mu.Unlock()
+		path := "/v2/service_instances/one/service_bindings/orphan"
+		w := call(b, "PUT", path, bind)
+		if w.Code != 503 {
+			t.Fatalf("expected lost response: %d %s", w.Code, w.Body)
+		}
+		w = call(b, "DELETE", path+"?service_id=service&plan_id=work-plan", "")
+		if w.Code != 200 && w.Code != 410 {
+			t.Fatalf("orphan cleanup: %d %s", w.Code, w.Body)
+		}
+		mu.Lock()
+		if len(routes) != 0 {
+			t.Errorf("orphan DELETE left %d routes without grants", len(routes))
+		}
+		clear(routes)
+		mu.Unlock()
+	})
+	t.Run("grant commit failure is recoverable by a binding retry", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := state.pool.Exec(ctx, `CREATE FUNCTION reject_test_grant() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected commit failure'; END $$; CREATE CONSTRAINT TRIGGER reject_test_grant AFTER INSERT ON agw_mcp_bindings DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_test_grant()`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "/v2/service_instances/one/service_bindings/commit-failure"
+		w := call(b, "PUT", path, bind)
+		_, err = state.pool.Exec(ctx, `DROP TRIGGER reject_test_grant ON agw_mcp_bindings; DROP FUNCTION reject_test_grant()`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 503 {
+			t.Fatalf("expected failed commit: %d %s", w.Code, w.Body)
+		}
+		w = call(b, "PUT", path, bind)
+		if w.Code != 201 {
+			t.Fatalf("retry: %d %s", w.Code, w.Body)
+		}
+		mu.Lock()
+		if len(routes) != 1 {
+			t.Errorf("retry after commit failure left %d routes", len(routes))
+		}
+		mu.Unlock()
+		w = call(b, "DELETE", path+"?service_id=service&plan_id=work-plan", "")
+		if w.Code != 200 {
+			t.Fatalf("cleanup: %d %s", w.Code, w.Body)
+		}
+		mu.Lock()
+		if len(routes) != 0 {
+			t.Errorf("cleanup left %d routes", len(routes))
+		}
+		clear(routes)
+		mu.Unlock()
+	})
 	w = call(b, "PUT", "/v2/service_instances/one/service_bindings/binding-one", bind)
 	if w.Code != 201 {
 		t.Fatalf("bind %d: %s", w.Code, w.Body)
