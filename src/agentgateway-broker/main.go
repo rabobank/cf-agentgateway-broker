@@ -411,7 +411,11 @@ func (b *Broker) catalog(w http.ResponseWriter) {
 	}
 	for _, backend := range b.cfg.MCPServers {
 		if backend.PlanID != "" {
-			service["plans"] = append(service["plans"].([]any), map[string]any{"id": backend.PlanID, "name": backend.Name, "description": backend.Description, "free": true, "metadata": map[string]any{"protocol": "mcp", "auth_method": backend.Auth.Method}})
+			description := backend.Description
+			if strings.TrimSpace(description) == "" {
+				description = "Access to the " + backend.Name + " MCP backend"
+			}
+			service["plans"] = append(service["plans"].([]any), map[string]any{"id": backend.PlanID, "name": backend.Name, "description": description, "free": true, "metadata": map[string]any{"protocol": "mcp", "auth_method": backend.Auth.Method}})
 		}
 	}
 	write(w, 200, map[string]any{"services": []any{service}})

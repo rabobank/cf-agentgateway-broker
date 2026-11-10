@@ -8,7 +8,13 @@ through the legacy global `/mcp` target list.
 ## Operator configuration
 
 `mcp_servers` / `MCP_SERVERS` accepts entries with `name`, stable `plan_id`,
-`description`, `url`, optional static `headers`, and `auth`:
+optional `description`, `url`, optional static `headers`, and `auth`.
+
+An omitted or whitespace-only `description` defaults to
+`Access to the <name> MCP backend` in the service catalog. Nonblank operator
+descriptions are preserved as supplied.
+
+The `auth` settings are:
 
 - `method`: `none`, `static`, `passthrough`, or `federated_client_credentials`.
 - `issuer`: exact trusted JWT issuer.
