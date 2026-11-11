@@ -2,8 +2,46 @@ package mcpconfig
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
+
+func TestUpstreamHeaderSyntax(t *testing.T) {
+	for _, test := range []struct {
+		name, key, value string
+		valid            bool
+	}{
+		{"space in name", "X Backend Key", "value", false},
+		{"colon in name", "X:Key", "value", false},
+		{"tab in name", "X\tKey", "value", false},
+		{"non-ASCII name", "X-é", "value", false},
+		{"empty name", "", "value", false},
+		{"NUL value", "X-Key", "a\x00b", false},
+		{"newline value", "X-Key", "a\nb", false},
+		{"token punctuation", "!#$%&'*+-.^_`|~012AZaz", "value", true},
+		{"tabs and non-ASCII value", "X-Key", "\t café \t", true},
+		{"empty value", "X-Key", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := Backend{Name: "tools", URL: "https://tools.example/mcp", Headers: map[string]string{test.key: test.value}}
+			err := Validate([]Backend{backend})
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v, got %v", test.valid, err)
+			}
+		})
+	}
+	for c := byte(0); c < 128; c++ {
+		if c >= 32 && c != 127 || c == '\t' {
+			continue
+		}
+		t.Run(fmt.Sprintf("value-control-%02x", c), func(t *testing.T) {
+			backend := Backend{Name: "tools", URL: "https://tools.example/mcp", Headers: map[string]string{"X-Key": string([]byte{'a', c, 'b'})}}
+			if err := Validate([]Backend{backend}); err == nil {
+				t.Fatalf("control byte %02x accepted", c)
+			}
+		})
+	}
+}
 
 func TestRouteResourceIsStableButBackendTargetChangesWithGeneration(t *testing.T) {
 	binding := Binding{ID: "binding", Generation: "first", Instance: Instance{ID: "instance", Installation: "installation", Generation: "instance-first", Backend: Backend{Name: "tools", Auth: Auth{Method: "none"}}}}
