@@ -4,7 +4,6 @@ import (
 	mcpconfig "cf-mcp-config"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,9 +21,7 @@ func generation() (string, error) {
 	return hex.EncodeToString(id[:]), nil
 }
 func managedID(installation, instance, binding string) string {
-	data, _ := json.Marshal([]string{installation, instance, binding})
-	hash := sha256.Sum256(data)
-	return "cf-mcp-" + hex.EncodeToString(hash[:])
+	return mcpconfig.ManagedID(installation, instance, binding)
 }
 
 type managedResource struct {

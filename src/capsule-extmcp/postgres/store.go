@@ -222,7 +222,9 @@ func (s *Store) Authenticate(ctx context.Context, token string) (plugin.Identity
 
 func (s *Store) AuthorizeBinding(ctx context.Context, instance, binding, issuer, subject string) (plugin.Identity, error) {
 	var data []byte
-	err := s.pool.QueryRow(ctx, `SELECT b.value_json->'metadata' FROM agw_config_resources b JOIN agw_config_resources i ON i.kind='mcp.instance' AND i.id=b.value_json->>'instance' AND i.deleted_at IS NULL WHERE b.kind='mcp.grant' AND b.deleted_at IS NULL AND b.value_json->'metadata'->'instance'->>'installation'=$1 AND b.value_json->'metadata'->'instance'->>'id'=$2 AND b.value_json->'metadata'->>'id'=$3`, s.logID, instance, binding).Scan(&data)
+	grantID := mcpconfig.ManagedID(s.logID, instance, binding)
+	parentID := mcpconfig.ManagedID(s.logID, instance, "")
+	err := s.pool.QueryRow(ctx, `SELECT b.value_json->'metadata' FROM agw_config_resources b JOIN agw_config_resources i ON i.kind='mcp.instance' AND i.id=$2 AND i.id=b.value_json->>'instance' AND i.deleted_at IS NULL WHERE b.kind='mcp.grant' AND b.id=$1 AND b.deleted_at IS NULL`, grantID, parentID).Scan(&data)
 	if err != nil {
 		return plugin.Identity{}, err
 	}

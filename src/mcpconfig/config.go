@@ -68,6 +68,14 @@ type Binding struct {
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func ValidID(s string) bool { return identifier.MatchString(s) }
+
+// ManagedID is the stable gateway resource key shared by lifecycle translation
+// and authorization. An empty binding identifies the parent instance resource.
+func ManagedID(installation, instance, binding string) string {
+	data, _ := json.Marshal([]string{installation, instance, binding})
+	hash := sha256.Sum256(data)
+	return "cf-mcp-" + hex.EncodeToString(hash[:])
+}
 func secureURL(raw string) bool {
 	u, e := url.Parse(raw)
 	return e == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Fragment == "" && u.RawQuery == ""
