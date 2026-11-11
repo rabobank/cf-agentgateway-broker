@@ -164,11 +164,6 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			}
 			return true
 		}
-		params, err := backend.Resolve(req.Parameters)
-		if err != nil {
-			fail(w, 400, err.Error())
-			return true
-		}
 		fp := fingerprint(req)
 		if instance != nil {
 			if instance.Fingerprint != fp {
@@ -176,6 +171,11 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			} else {
 				write(w, 200, map[string]any{})
 			}
+			return true
+		}
+		params, err := backend.Resolve(req.Parameters)
+		if err != nil {
+			fail(w, 400, err.Error())
 			return true
 		}
 		legacy, err := b.find(ctx, id)
