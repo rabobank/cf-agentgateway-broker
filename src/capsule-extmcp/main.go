@@ -119,6 +119,7 @@ func run(ctx context.Context) error {
 	api.RegisterExtMcpServer(grpcServer, plugin.NewServer(store, producer))
 	mux := http.NewServeMux()
 	mux.Handle("/authorize", plugin.AuthHandler(store))
+	mux.Handle("/authorize-binding", plugin.BindingAuthHandler(store))
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		c, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()

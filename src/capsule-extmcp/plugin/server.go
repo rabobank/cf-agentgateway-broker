@@ -40,12 +40,23 @@ func (s *Server) CheckRequest(ctx context.Context, req *api.McpRequest) (*api.Mc
 			}
 		}
 	}
-	if token == "" {
-		return nil, status.Error(codes.Unauthenticated, "bearer credential required")
-	}
-	identity, err := s.repo.Authenticate(ctx, token)
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "invalid service-instance credential")
+	var identity Identity
+	var err error
+	// Binding metadata originates from the loopback live-grant authorization
+	// service, after frontend JWT validation. It is not a consumer header.
+	if value, ok := req.MetadataContext.AsMap()["binding"]; ok {
+		data, e := json.Marshal(value)
+		if e != nil || json.Unmarshal(data, &identity) != nil || identity.Binding == "" || identity.Account.Issuer == "" || identity.Account.Subject == "" || len(req.ServiceNames) != 1 || identity.Target != req.ServiceNames[0] {
+			return nil, status.Error(codes.Unauthenticated, "invalid binding context")
+		}
+	} else {
+		if token == "" {
+			return nil, status.Error(codes.Unauthenticated, "bearer credential required")
+		}
+		identity, err = s.repo.Authenticate(ctx, token)
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, "invalid service-instance credential")
+		}
 	}
 	response := &api.McpRequestResult{Result: &api.McpRequestResult_Pass{Pass: &api.Pass{}}}
 	if req.Method != "tools/call" {

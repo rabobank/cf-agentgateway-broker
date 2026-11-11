@@ -19,6 +19,7 @@ applications:
   services: [((database_service_name))]
   env:
     APP_ROLE: gateway
+    RUST_MIN_STACK: "16777216"
     DATABASE_SERVICE_NAME: ((database_service_name))
     MANAGEMENT_TOKEN: ((management_token))
     GATEWAY_MODELS: ((gateway_models))
@@ -47,8 +48,6 @@ applications:
     MANAGEMENT_TOKEN: ((management_token))
     GATEWAY_URL: ((gateway_url))
     GATEWAY_TRUSTED_CA: ((trusted_ca))
-    MODEL_ALIASES: ((model_aliases))
-    USD_ALLOWANCE: ((usd_allowance))
-    BUDGET_WINDOW: ((budget_window))
+    INFERENCE_PLANS: ((inference_plans))
     MCP_SERVERS: ((mcp_servers))
     MCP_URL: ((mcp_url))
