@@ -1,6 +1,7 @@
 package main
 
 import (
+	mcpconfig "cf-mcp-config"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,68 @@ import (
 	"sync"
 	"testing"
 )
+
+func TestMCPProvisionRetryUsesPersistedSnapshot(t *testing.T) {
+	for _, change := range []string{"tighter parameter validation", "different auth method"} {
+		t.Run(change, func(t *testing.T) {
+			b, _ := fixture(t)
+			backend := mcpconfig.Backend{Name: "work", PlanID: "work-plan", URL: "https://tools.test/mcp", Auth: mcpconfig.Auth{
+				Method: "federated_client_credentials", Issuer: "https://uaa.test/oauth/token", JWKSURL: "https://uaa.test/keys", Audience: "urn:exchange",
+				TokenEndpoint: "https://tokens.test/{tenant}/token", Scopes: []string{"read"}, Parameters: map[string]string{"tenant": "[a-z]+"},
+			}}
+			request := Request{ServiceID: "service", PlanID: "work-plan", Parameters: map[string]any{"client_id": "client", "tenant": "team"}}
+			instance := mcpconfig.Instance{ID: "one", Installation: b.cfg.Installation, ServiceID: request.ServiceID, PlanID: request.PlanID, Fingerprint: fingerprint(request), Backend: backend, Generation: "persisted-generation", Parameters: map[string]string{"client_id": "client", "tenant": "team"}}
+			metadata, err := json.Marshal(instance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("retry attempted a management write: %s", r.Method)
+					w.WriteHeader(500)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/mcp.instance") {
+					write(w, 200, map[string]any{"resources": []any{map[string]any{"id": managedID(b.cfg.Installation, "one", ""), "value": managedValue{Name: managedID(b.cfg.Installation, "one", ""), Metadata: metadata}}}})
+					return
+				}
+				write(w, 200, map[string]any{"resources": []any{}})
+			}))
+			defer server.Close()
+			// Use a fresh replica and a separately decoded backend, so editing current
+			// configuration cannot mutate the persisted snapshot's parameter map.
+			data, _ := json.Marshal(backend)
+			var current mcpconfig.Backend
+			if err := json.Unmarshal(data, &current); err != nil {
+				t.Fatal(err)
+			}
+			if change == "tighter parameter validation" {
+				current.Auth.Parameters["tenant"] = "production"
+			} else {
+				current.Auth = mcpconfig.Auth{Method: "none", Issuer: backend.Auth.Issuer, JWKSURL: backend.Auth.JWKSURL, Audience: backend.Auth.Audience}
+			}
+			b.cfg.MCPServers = []mcpconfig.Backend{current}
+			b.cfg.MCPURL = "https://gateway.test/mcp"
+			b.cfg.ManagementURL = server.URL
+			replica, err := newBroker(b.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(request)
+			if w := call(replica, "PUT", "/v2/service_instances/one", string(body)); w.Code != 200 {
+				t.Fatalf("identical retry: %d %s", w.Code, w.Body)
+			}
+			request.Parameters["tenant"] = "different"
+			conflict, _ := json.Marshal(request)
+			if w := call(replica, "PUT", "/v2/service_instances/one", string(conflict)); w.Code != 409 {
+				t.Fatalf("conflicting retry: %d %s", w.Code, w.Body)
+			}
+			if w := call(replica, "PUT", "/v2/service_instances/new", string(body)); w.Code != 400 {
+				t.Fatalf("new instance must use current validation: %d %s", w.Code, w.Body)
+			}
+		})
+	}
+}
 
 func TestMCPTranslatorRecoversFromGatewayStateWithoutDatabase(t *testing.T) {
 	b, _ := fixture(t)
