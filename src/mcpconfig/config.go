@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -69,6 +68,25 @@ var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func ValidID(s string) bool { return identifier.MatchString(s) }
 
+func validHeader(name, value string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c)) {
+			continue
+		}
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if c := value[i]; c < 32 && c != '\t' || c == 127 {
+			return false
+		}
+	}
+	return true
+}
+
 // ManagedID is the stable gateway resource key shared by lifecycle translation
 // and authorization. An empty binding identifies the parent instance resource.
 func ManagedID(installation, instance, binding string) string {
@@ -108,7 +126,7 @@ func Validate(backends []Backend) error {
 		}
 		names[b.Name] = true
 		for k, v := range b.Headers {
-			if strings.ContainsAny(k+v, "\r\n") || http.CanonicalHeaderKey(k) == "" {
+			if !validHeader(k, v) {
 				return errors.New("invalid upstream header")
 			}
 		}
