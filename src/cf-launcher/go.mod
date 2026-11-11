@@ -3,9 +3,12 @@ module agentgateway-cf-launcher
 go 1.26.0
 
 require (
+	cf-mcp-config v0.0.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 )
+
+replace cf-mcp-config => ../mcpconfig
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
