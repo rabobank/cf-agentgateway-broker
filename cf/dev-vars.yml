@@ -16,9 +16,8 @@ database_service_name: agentgateway-state
 installation: cf-agentgateway
 management_url: http://agentgateway-management.apps.internal:9090
 gateway_url: https://agentgateway.10.246.0.21.sslip.io/v1
-model_aliases: deepseek-v4-flash
-usd_allowance: '10'
-budget_window: 24h
+inference_plans: >-
+  [{"id":"eba8b5b0-e8a7-49cb-8188-cfa52ed43bdd","name":"shared","description":"Shared model allowance","free":true,"models":["deepseek-v4-flash"],"budget":10,"window":"24h"}]
 mcp_servers: '[]'
 mcp_url: https://agentgateway.10.246.0.21.sslip.io/mcp
 capsule_witness_url: ''

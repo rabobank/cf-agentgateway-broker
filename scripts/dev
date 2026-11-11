@@ -147,7 +147,7 @@ eventually 'restart retains budget usage' 429 "${inference[1]}/v1/chat/completio
 expect 200 "${management[0]}/api/config/resources/llm.apiKey/$id" DELETE '' management-fixture
 for index in 0 1; do eventually "deletion revokes replica $index" 401 "${inference[index]}/v1/models" GET '' "$key"; done
 broker_url="http://127.0.0.1:$((base+12))"
-jq -n --arg listen "127.0.0.1:$((base+12))" --arg gateway "${inference[0]}/v1" --arg management "${management[0]}" '{listen:$listen,username:"broker",password:"broker-fixture",installation:"dev",gateway_url:$gateway,management_url:$management,management_token:"management-fixture",service_id:"service",plan_id:"plan",models:["fixture-model"],budget:100,window:"24h"}' >"$work/broker.json"
+jq -n --arg listen "127.0.0.1:$((base+12))" --arg gateway "${inference[0]}/v1" --arg management "${management[0]}" '{listen:$listen,username:"broker",password:"broker-fixture",installation:"dev",gateway_url:$gateway,management_url:$management,management_token:"management-fixture",service_id:"service",inference_plans:[{id:"plan",name:"dev-inference",description:"Development fixture allowance",free:true,models:["fixture-model"],budget:100,window:"24h"}]}' >"$work/broker.json"
 "$broker" -config "$work/broker.json" >"$work/broker.log" 2>&1 & pids+=("$!")
 eventually 'broker readiness against gateway API' 200 "$broker_url/ready"
 instance="$broker_url/v2/service_instances/dev-instance"

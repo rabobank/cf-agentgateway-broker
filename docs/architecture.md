@@ -1,5 +1,11 @@
 # CF architecture
 
+Plan-based MCP access extends the lifecycle below with gateway-managed instance
+and binding resources, service-account JWT authorization, generic backend auth, and
+per-binding routes. See [MCP federation](mcp-federation.md) for its configuration,
+revocation and selected-identity capsule contract. The inference lifecycle and
+legacy global MCP entries retain the shared-key model described here.
+
 ```text
 Cloud Controller -> CF HTTPS route -> stateless Go OSB broker
                                          |

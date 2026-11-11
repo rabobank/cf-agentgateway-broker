@@ -5,6 +5,7 @@ package postgres
 
 import (
 	"bytes"
+	mcpconfig "cf-mcp-config"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -217,6 +218,22 @@ func (s *Store) Authenticate(ctx context.Context, token string) (plugin.Identity
 		return plugin.Identity{}, errors.New("credential has no broker identity")
 	}
 	return identity, nil
+}
+
+func (s *Store) AuthorizeBinding(ctx context.Context, instance, binding, issuer, subject string) (plugin.Identity, error) {
+	var data []byte
+	grantID := mcpconfig.ManagedID(s.logID, instance, binding)
+	parentID := mcpconfig.ManagedID(s.logID, instance, "")
+	err := s.pool.QueryRow(ctx, `SELECT b.value_json->'metadata' FROM agw_config_resources b JOIN agw_config_resources i ON i.kind='mcp.instance' AND i.id=$2 AND i.id=b.value_json->>'instance' AND i.deleted_at IS NULL WHERE b.kind='mcp.grant' AND b.id=$1 AND b.deleted_at IS NULL`, grantID, parentID).Scan(&data)
+	if err != nil {
+		return plugin.Identity{}, err
+	}
+	var grant mcpconfig.Binding
+	if json.Unmarshal(data, &grant) != nil || grant.Revoked || grant.Account.Issuer != issuer || grant.Account.Subject != subject || grant.Instance.Installation != s.logID || grant.Instance.ID != instance || grant.ID != binding {
+		return plugin.Identity{}, errors.New("binding identity mismatch")
+	}
+	selected := grant.Selected()
+	return plugin.Identity{Installation: s.logID, Instance: instance, Binding: binding, Target: grant.TargetName(), Org: grant.Instance.Org, Space: grant.Instance.Space, Account: grant.Account, SelectedIdentity: selected}, nil
 }
 
 func validTime(t time.Time) bool {

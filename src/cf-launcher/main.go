@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 )
 
@@ -71,13 +70,22 @@ func run(mode string) error {
 	args := []string{"broker", "-config", "config/runtime.json"}
 	switch mode {
 	case "broker":
-		config = map[string]any{"listen": fmt.Sprintf("0.0.0.0:%d", port), "username": "broker", "password": required("BROKER_PASSWORD"), "installation": required("INSTALLATION"), "gateway_url": required("GATEWAY_URL"), "management_url": required("MANAGEMENT_URL"), "management_token": required("MANAGEMENT_TOKEN"), "service_id": "1b0b97a6-41df-4a39-9b23-53f17a5f85be", "plan_id": "eba8b5b0-e8a7-49cb-8188-cfa52ed43bdd", "models": strings.Split(required("MODEL_ALIASES"), ","), "budget": json.Number(required("USD_ALLOWANCE")), "window": required("BUDGET_WINDOW")}
+		var plans []map[string]any
+		if err := json.Unmarshal([]byte(required("INFERENCE_PLANS")), &plans); err != nil || plans == nil {
+			return errors.New("INFERENCE_PLANS must be a JSON array")
+		}
+		config = map[string]any{"listen": fmt.Sprintf("0.0.0.0:%d", port), "username": "broker", "password": required("BROKER_PASSWORD"), "installation": required("INSTALLATION"), "gateway_url": required("GATEWAY_URL"), "management_url": required("MANAGEMENT_URL"), "management_token": required("MANAGEMENT_TOKEN"), "service_id": "1b0b97a6-41df-4a39-9b23-53f17a5f85be", "inference_plans": plans}
 		mcp, err := mcpConfig(os.Getenv("MCP_SERVERS"))
 		if err != nil {
 			return err
 		}
 		if mcp != nil {
 			config.(map[string]any)["mcp_url"] = required("MCP_URL")
+			var servers []mcpServer
+			if err := json.Unmarshal([]byte(os.Getenv("MCP_SERVERS")), &servers); err != nil {
+				return err
+			}
+			config.(map[string]any)["mcp_servers"] = servers
 		}
 		if ca != "" {
 			config.(map[string]any)["trusted_ca_file"] = "config/inference-ca.pem"

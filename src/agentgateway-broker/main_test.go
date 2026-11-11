@@ -59,7 +59,7 @@ func fixture(t *testing.T) (*Broker, *map[string]Resource) {
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certServer.Certificate().Raw}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	b, err := newBroker(Config{Listen: ":8080", Username: "broker", Password: "secret", Installation: "test", GatewayURL: "https://gateway.test/v1", ManagementURL: server.URL, TrustedCAFile: caFile, ServiceID: "service", PlanID: "plan", Models: []string{"model"}, Budget: json.Number("1.25"), Window: "24h"})
+	b, err := newBroker(Config{Listen: ":8080", Username: "broker", Password: "secret", Installation: "test", GatewayURL: "https://gateway.test/v1", ManagementURL: server.URL, TrustedCAFile: caFile, ServiceID: "service", InferencePlans: []InferencePlan{{ID: "plan", Name: "inference", Description: "Test inference", Free: true, Models: []string{"model"}, Budget: json.Number("1.25"), Window: "24h"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

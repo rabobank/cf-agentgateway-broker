@@ -3,9 +3,11 @@ package postgres_test
 import (
 	"cf-agentgateway-capsule/plugin"
 	"cf-agentgateway-capsule/postgres"
+	mcpconfig "cf-mcp-config"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -108,6 +110,102 @@ var _ = Describe("Durable ledger", func() {
 		pending, err := store.PendingWitnesses(context.Background(), time.Now().UTC(), 10)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(HaveLen(1))
+	})
+	It("persists signed capsules with full, partial and absent identity attribution", func() {
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		for i, attribution := range []string{
+			`{"service_account":{"issuer":"https://issuer.test","subject":"account"},"selected_identity":{"backend_id":"tools","auth_method":"federated_client_credentials","client_id":"client","authority":"https://tokens.test"}}`,
+			`{"selected_identity":{"auth_method":"passthrough"}}`,
+			`{}`,
+		} {
+			identity := plugin.Identity{Installation: logID, Instance: "one"}
+			Expect(json.Unmarshal([]byte(attribution), &identity)).To(Succeed())
+			record := plugin.Capsule{ID: fmt.Sprintf("attribution-%d", i), Identity: identity, Phase: "planned", Tool: "echo", Backends: []string{"target"}, ObservedAt: time.Now().UTC()}
+			sealed, err := producer.Seal(record, json.RawMessage(`{"name":"echo"}`))
+			Expect(err).NotTo(HaveOccurred())
+			record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+			Expect(store.Save(context.Background(), record)).To(Succeed())
+			Expect(store.Save(context.Background(), record)).To(Succeed())
+			loaded, err := store.Get(context.Background(), record.ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loaded.Identity).To(Equal(identity))
+			for _, altered := range []string{
+				`{"service_account":{"issuer":"https://other.test","subject":"different"}}`,
+				`{"selected_identity":{"client_id":"other-client"}}`,
+			} {
+				changed := record
+				// Decode a fresh value so this test does not share nested objects.
+				data, err := json.Marshal(identity)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(json.Unmarshal(data, &changed.Identity)).To(Succeed())
+				Expect(json.Unmarshal([]byte(altered), &changed.Identity)).To(Succeed())
+				Expect(store.Save(context.Background(), changed)).NotTo(Succeed())
+			}
+		}
+	})
+	It("authorizes only the live binding account and denies tombstoned instances and bindings", func() {
+		ctx := context.Background()
+		// Fixture for the gateway-owned store; the sidecar never creates this in production.
+		_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS agw_config_resources (kind text,id text,value_json jsonb,deleted_at timestamptz,PRIMARY KEY(kind,id))`)
+		Expect(err).NotTo(HaveOccurred())
+		grant := mcpconfig.Binding{ID: "binding", Instance: mcpconfig.Instance{ID: "instance", Installation: logID, Backend: mcpconfig.Backend{Name: "tools", Auth: mcpconfig.Auth{Method: "passthrough"}}}, Account: mcpconfig.Account{Issuer: "https://issuer.test", Subject: "account"}}
+		parentID := mcpconfig.ManagedID(logID, "instance", "")
+		grantID := mcpconfig.ManagedID(logID, "instance", "binding")
+		instance, _ := json.Marshal(map[string]any{"name": parentID, "metadata": grant.Instance})
+		binding, _ := json.Marshal(map[string]any{"name": grantID, "instance": parentID, "metadata": grant})
+		_, err = pool.Exec(ctx, "INSERT INTO agw_config_resources VALUES('mcp.instance',$1,$2,NULL)", parentID, instance)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { pool.Exec(ctx, "DELETE FROM agw_config_resources WHERE id IN ($1,$2)", parentID, grantID) })
+		_, err = pool.Exec(ctx, "INSERT INTO agw_config_resources VALUES('mcp.grant',$1,$2,NULL)", grantID, binding)
+		Expect(err).NotTo(HaveOccurred())
+		identity, err := store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(identity.SelectedIdentity.BackendID).To(Equal("tools"))
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "wrong-account")
+		Expect(err).To(HaveOccurred())
+		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=now() WHERE kind='mcp.grant' AND id=$1`, grantID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred())
+		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=NULL WHERE kind='mcp.grant' AND id=$1`, grantID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=now() WHERE kind='mcp.instance' AND id=$1`, parentID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred())
+	})
+	It("authorizes the stable managed grant ID rather than matching unrelated metadata", func() {
+		ctx := context.Background()
+		_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS agw_config_resources (kind text,id text,value_json jsonb,deleted_at timestamptz,PRIMARY KEY(kind,id))`)
+		Expect(err).NotTo(HaveOccurred())
+		id := func(instance, binding string) string {
+			data, e := json.Marshal([]string{logID, instance, binding})
+			Expect(e).NotTo(HaveOccurred())
+			digest := sha256.Sum256(data)
+			return "cf-mcp-" + hex.EncodeToString(digest[:])
+		}
+		parentID, grantID := id("instance", ""), id("instance", "binding")
+		decoyID := logID + "-decoy"
+		grant := mcpconfig.Binding{ID: "binding", Instance: mcpconfig.Instance{ID: "instance", Installation: logID}, Account: mcpconfig.Account{Issuer: "https://issuer.test", Subject: "account"}}
+		parent, _ := json.Marshal(map[string]any{"name": parentID, "metadata": grant.Instance})
+		value, _ := json.Marshal(map[string]any{"name": grantID, "instance": parentID, "metadata": grant})
+		_, err = pool.Exec(ctx, `INSERT INTO agw_config_resources VALUES('mcp.instance',$1,$2,NULL),('mcp.grant',$3,$4,NULL)`, parentID, parent, decoyID, value)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			pool.Exec(ctx, "DELETE FROM agw_config_resources WHERE id IN ($1,$2,$3)", parentID, grantID, decoyID)
+		})
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred(), "metadata alone must not select a grant stored under another resource ID")
+		_, err = pool.Exec(ctx, `INSERT INTO agw_config_resources VALUES('mcp.grant',$1,$2,NULL)`, grantID, value)
+		Expect(err).NotTo(HaveOccurred())
+		identity, err := store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(identity.Binding).To(Equal("binding"))
+		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=now() WHERE kind='mcp.instance' AND id=$1`, parentID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred())
 	})
 	It("does not persist anything when evidence verification fails", func() {
 		Expect(store.Save(context.Background(), plugin.Capsule{ID: "invalid", Bytes: []byte(`{}`)})).NotTo(Succeed())

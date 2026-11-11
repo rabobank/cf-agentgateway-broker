@@ -3,6 +3,7 @@ module cf-agentgateway-capsule
 go 1.27.0
 
 require (
+	cf-mcp-config v0.0.0
 	github.com/action-state-group/capsule-emit/go v0.3.0
 	github.com/action-state-group/checkpointed-local-log/go v0.3.0
 	github.com/agentgateway/agentgateway/api v0.0.0
@@ -43,5 +44,7 @@ require (
 )
 
 replace github.com/agentgateway/agentgateway/api => ../agentgateway/api
+
+replace cf-mcp-config => ../mcpconfig
 
 tool github.com/maxbrunsfeld/counterfeiter/v6
