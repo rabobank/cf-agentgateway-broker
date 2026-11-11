@@ -18,14 +18,14 @@ type Repository interface {
 }
 
 type Identity struct {
-	Installation     string                      `json:"installation"`
-	Instance         string                      `json:"service_instance_id"`
-	Org              string                      `json:"org_id,omitempty"`
-	Space            string                      `json:"space_id,omitempty"`
-	Binding          string                      `json:"binding_id,omitempty"`
-	Target           string                      `json:"target,omitempty"`
-	Account          *mcpconfig.Account          `json:"service_account,omitempty"`
-	SelectedIdentity *mcpconfig.SelectedIdentity `json:"selected_identity,omitempty"`
+	Installation     string                     `json:"installation"`
+	Instance         string                     `json:"service_instance_id"`
+	Org              string                     `json:"org_id,omitempty"`
+	Space            string                     `json:"space_id,omitempty"`
+	Binding          string                     `json:"binding_id,omitempty"`
+	Target           string                     `json:"target,omitempty"`
+	Account          mcpconfig.Account          `json:"service_account,omitempty"`
+	SelectedIdentity mcpconfig.SelectedIdentity `json:"selected_identity,omitempty"`
 }
 
 type Capsule struct {

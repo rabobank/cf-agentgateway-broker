@@ -46,7 +46,7 @@ func (s *Server) CheckRequest(ctx context.Context, req *api.McpRequest) (*api.Mc
 	// service, after frontend JWT validation. It is not a consumer header.
 	if value, ok := req.MetadataContext.AsMap()["binding"]; ok {
 		data, e := json.Marshal(value)
-		if e != nil || json.Unmarshal(data, &identity) != nil || identity.Binding == "" || identity.Account == nil || identity.SelectedIdentity == nil || len(req.ServiceNames) != 1 || identity.Target != req.ServiceNames[0] {
+		if e != nil || json.Unmarshal(data, &identity) != nil || identity.Binding == "" || identity.Account.Issuer == "" || identity.Account.Subject == "" || len(req.ServiceNames) != 1 || identity.Target != req.ServiceNames[0] {
 			return nil, status.Error(codes.Unauthenticated, "invalid binding context")
 		}
 	} else {

@@ -139,7 +139,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		route := binding.Route()
 		pol := route["policies"].(map[string]any)
 		selected := binding.Selected()
-		identity := plugin.Identity{Installation: "lab", Instance: "instance", Binding: "binding", Target: binding.TargetName(), Account: &binding.Account, SelectedIdentity: &selected}
+		identity := plugin.Identity{Installation: "lab", Instance: "instance", Binding: "binding", Target: binding.TargetName(), Account: binding.Account, SelectedIdentity: selected}
 		grant := &bindingGrant{active: true, identity: identity}
 		authz := httptest.NewServer(plugin.BindingAuthHandler(grant))
 		DeferCleanup(authz.Close)
@@ -240,7 +240,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		Expect(body).To(ContainSubstring("federated-ok"))
 		Expect(repo.SaveCallCount()).To(Equal(2))
 		_, plan := repo.SaveArgsForCall(0)
-		Expect(plan.Identity.SelectedIdentity).To(Equal(&selected))
+		Expect(plan.Identity.SelectedIdentity).To(Equal(selected))
 		Expect(plan.Identity.Account.Subject).To(Equal(subject))
 		_, outcome := repo.SaveArgsForCall(1)
 		Expect(outcome.Identity).To(Equal(plan.Identity))

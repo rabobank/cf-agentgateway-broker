@@ -57,6 +57,28 @@ var _ = Describe("ExtMcp", func() {
 		Expect(repo.AuthenticateCallCount()).To(Equal(1))
 		Expect(repo.SaveCallCount()).To(BeZero())
 	})
+	It("accepts authorized binding context without selected identity attribution", func() {
+		request.Headers = nil
+		request.MetadataContext, _ = structpb.NewStruct(map[string]any{"binding": map[string]any{
+			"installation": "test", "service_instance_id": "instance-a", "binding_id": "binding", "target": "echo",
+			"service_account": map[string]any{"issuer": "https://issuer.test", "subject": "account"},
+		}})
+		_, err := server.CheckRequest(context.Background(), request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repo.AuthenticateCallCount()).To(BeZero())
+		_, record := repo.SaveArgsForCall(0)
+		Expect(record.Identity.Account.Subject).To(Equal("account"))
+		Expect(record.Identity.SelectedIdentity.BackendID).To(BeEmpty())
+	})
+	It("rejects binding context without its required service account", func() {
+		request.Headers = nil
+		request.MetadataContext, _ = structpb.NewStruct(map[string]any{"binding": map[string]any{
+			"installation": "test", "service_instance_id": "instance-a", "binding_id": "binding", "target": "echo",
+		}})
+		_, err := server.CheckRequest(context.Background(), request)
+		Expect(err).To(HaveOccurred())
+		Expect(repo.SaveCallCount()).To(BeZero())
+	})
 	It("rejects missing credentials", func() {
 		request.Headers = nil
 		_, err := server.CheckRequest(context.Background(), request)

@@ -231,7 +231,7 @@ func (s *Store) AuthorizeBinding(ctx context.Context, instance, binding, issuer,
 		return plugin.Identity{}, errors.New("binding identity mismatch")
 	}
 	selected := grant.Selected()
-	return plugin.Identity{Installation: s.logID, Instance: instance, Binding: binding, Target: grant.TargetName(), Org: grant.Instance.Org, Space: grant.Instance.Space, Account: &grant.Account, SelectedIdentity: &selected}, nil
+	return plugin.Identity{Installation: s.logID, Instance: instance, Binding: binding, Target: grant.TargetName(), Org: grant.Instance.Org, Space: grant.Instance.Space, Account: grant.Account, SelectedIdentity: selected}, nil
 }
 
 func validTime(t time.Time) bool {
