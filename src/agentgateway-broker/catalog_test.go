@@ -125,3 +125,48 @@ func TestCatalogValidatesAllPlanIDsAndNamesTogether(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPOnlyCatalogAndEmptyCatalogValidation(t *testing.T) {
+	b, _ := fixture(t)
+	if err := json.Unmarshal([]byte(`{"inference_plans":[],"mcp_url":"https://gateway.test/mcp","mcp_servers":[{"name":"shared","plan_id":"tools-id","url":"https://tools.test/mcp","auth":{"method":"none","issuer":"https://uaa.test","jwks_url":"https://uaa.test/keys","audience":"urn:test"}}]}`), &b.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	w := call(b, "GET", "/v2/catalog", "")
+	var catalog struct {
+		Services []struct {
+			Plans []struct {
+				ID string `json:"id"`
+			} `json:"plans"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Services) != 1 || len(catalog.Services[0].Plans) != 1 || catalog.Services[0].Plans[0].ID != "tools-id" {
+		t.Fatalf("unexpected MCP-only catalog: %s", w.Body)
+	}
+	b.cfg.MCPServers = nil
+	if err := b.cfg.validate(); err == nil {
+		t.Fatal("empty catalog accepted")
+	}
+}
+
+func TestInferencePlanCannotBeChangedByBindingOrDeletion(t *testing.T) {
+	b, resources := fixture(t)
+	configureInferencePlans(t, b, `[{"id":"first","name":"first","description":"First","models":["model"],"budget":1,"window":"24h"},{"id":"other","name":"other","description":"Other","models":["model"],"budget":2,"window":"24h"}]`)
+	if w := call(b, "PUT", "/v2/service_instances/one", `{"service_id":"service","plan_id":"first"}`); w.Code != 201 {
+		t.Fatalf("provision: %d %s", w.Code, w.Body)
+	}
+	if w := call(b, "PUT", "/v2/service_instances/one/service_bindings/app", `{"service_id":"service","plan_id":"other"}`); w.Code != 409 {
+		t.Fatalf("wrong plan bind: %d %s", w.Code, w.Body)
+	}
+	if w := call(b, "DELETE", "/v2/service_instances/one?service_id=service&plan_id=other", ""); w.Code != 409 {
+		t.Fatalf("wrong plan delete: %d %s", w.Code, w.Body)
+	}
+	if len(*resources) != 1 {
+		t.Fatal("wrong-plan delete revoked instance")
+	}
+}

@@ -42,7 +42,7 @@ func TestRouteResourceIsStableButBackendTargetChangesWithGeneration(t *testing.T
 
 func TestFederationParameterIsolation(t *testing.T) {
 	b := Backend{Name: "tools", PlanID: "tools-plan", URL: "https://tools.example/mcp", Auth: Auth{Method: "federated_client_credentials", Issuer: "https://issuer.example/token", JWKSURL: "https://issuer.example/keys", Audience: "urn:exchange", TokenEndpoint: "https://tokens.example/{tenant}/token", Scopes: []string{"read"}, Parameters: map[string]string{"tenant": "[a-z0-9.-]+"}}}
-	if err := Validate([]Backend{b}, "inference"); err != nil {
+	if err := Validate([]Backend{b}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tenant := range []string{"../evil", "..", "a/b", "a%2fb", "a?x", "a#x"} {

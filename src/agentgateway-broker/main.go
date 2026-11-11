@@ -45,11 +45,27 @@ type Config struct {
 	Certificate     string              `json:"certificate"`
 	PrivateKey      string              `json:"private_key"`
 	ServiceID       string              `json:"service_id"`
-	PlanID          string              `json:"plan_id"`
-	Models          []string            `json:"models"`
-	Budget          json.Number         `json:"budget"`
-	Window          string              `json:"window"`
+	InferencePlans  []InferencePlan     `json:"inference_plans"`
 	MCPServers      []mcpconfig.Backend `json:"mcp_servers,omitempty"`
+}
+
+type InferencePlan struct {
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Free        bool        `json:"free"`
+	Models      []string    `json:"models"`
+	Budget      json.Number `json:"budget"`
+	Window      string      `json:"window"`
+}
+
+func (b *Broker) inferencePlan(id string) *InferencePlan {
+	for i := range b.cfg.InferencePlans {
+		if b.cfg.InferencePlans[i].ID == id {
+			return &b.cfg.InferencePlans[i]
+		}
+	}
+	return nil
 }
 
 type Resource struct {
@@ -96,8 +112,55 @@ func (e *apiError) Error() string { return e.message }
 var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func (c Config) validate() error {
-	if err := mcpconfig.Validate(c.MCPServers, c.PlanID); err != nil {
+	if err := mcpconfig.Validate(c.MCPServers); err != nil {
 		return err
+	}
+	ids, names := map[string]bool{}, map[string]bool{}
+	add := func(id, name string) error {
+		if !resourceID.MatchString(id) || !resourceID.MatchString(name) {
+			return errors.New("plan IDs and names must be nonempty identifiers")
+		}
+		if ids[id] {
+			return fmt.Errorf("duplicate plan ID %q", id)
+		}
+		if names[name] {
+			return fmt.Errorf("duplicate plan name %q", name)
+		}
+		ids[id], names[name] = true, true
+		return nil
+	}
+	for _, plan := range c.InferencePlans {
+		if err := add(plan.ID, plan.Name); err != nil {
+			return err
+		}
+		if strings.TrimSpace(plan.Description) == "" {
+			return errors.New("inference plan description is required")
+		}
+		amount, err := plan.Budget.Float64()
+		if err != nil || amount <= 0 {
+			return errors.New("positive USD budget is required")
+		}
+		if plan.Window == "" {
+			return errors.New("inference plan window is required")
+		}
+		if len(plan.Models) == 0 {
+			return errors.New("model allowlist is required")
+		}
+		for _, model := range plan.Models {
+			if model == "" || strings.Contains(model, "*") {
+				return errors.New("model aliases must be explicit")
+			}
+		}
+	}
+	for _, backend := range c.MCPServers {
+		if backend.PlanID != "" {
+			if err := add(backend.PlanID, backend.Name); err != nil {
+				return err
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return errors.New("at least one service plan is required")
 	}
 	if len(c.MCPServers) > 0 && c.MCPURL == "" {
 		return errors.New("MCP URL required with MCP servers")
@@ -108,7 +171,7 @@ func (c Config) validate() error {
 			return errors.New("invalid MCP URL")
 		}
 	}
-	for name, value := range map[string]string{"listen": c.Listen, "username": c.Username, "password": c.Password, "installation": c.Installation, "service_id": c.ServiceID, "plan_id": c.PlanID, "window": c.Window} {
+	for name, value := range map[string]string{"listen": c.Listen, "username": c.Username, "password": c.Password, "installation": c.Installation, "service_id": c.ServiceID} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
 		}
@@ -117,18 +180,6 @@ func (c Config) validate() error {
 		u, err := url.Parse(value)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return errors.New("invalid gateway URL")
-		}
-	}
-	amount, err := c.Budget.Float64()
-	if err != nil || amount <= 0 {
-		return errors.New("positive USD budget is required")
-	}
-	if len(c.Models) == 0 {
-		return errors.New("model allowlist is required")
-	}
-	for _, model := range c.Models {
-		if model == "" || strings.Contains(model, "*") {
-			return errors.New("model aliases must be explicit")
 		}
 	}
 	if (c.Certificate == "") != (c.PrivateKey == "") {
@@ -318,7 +369,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.PlanID = r.URL.Query().Get("plan_id")
 	}
 	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
-		if req.ServiceID != b.cfg.ServiceID || req.PlanID != b.cfg.PlanID {
+		if req.ServiceID != b.cfg.ServiceID || b.inferencePlan(req.PlanID) == nil {
 			fail(w, 400, "unknown service or plan")
 			return
 		}
@@ -342,6 +393,10 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	existing, err := b.find(r.Context(), id)
 	if err != nil {
 		fail(w, 503, "cannot resolve service instance in gateway")
+		return
+	}
+	if existing != nil && (existing.Value.Metadata[labelPrefix+"service"] != req.ServiceID || existing.Value.Metadata[labelPrefix+"plan"] != req.PlanID) {
+		fail(w, 409, "instance service or plan mismatch")
 		return
 	}
 	if len(parts) == 5 {
@@ -392,9 +447,10 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "credential generation failed")
 		return
 	}
+	plan := b.inferencePlan(req.PlanID)
 	key := Key{Key: "sk-cf-" + base64.RawURLEncoding.EncodeToString(secret), Metadata: map[string]any{
 		"name": "cf-" + id, labelPrefix + "instance": id, labelPrefix + "installation": b.cfg.Installation, labelPrefix + "service": req.ServiceID, labelPrefix + "plan": req.PlanID, labelPrefix + "fingerprint": fp, labelPrefix + "org": req.OrganizationGUID, labelPrefix + "space": req.SpaceGUID,
-	}, AllowedModels: b.cfg.Models, Budgets: []Budget{{Name: "instance-spend", Limit: Limit{"USD", b.cfg.Budget}, Window: map[string]string{"rolling": b.cfg.Window}, Action: "Block"}}}
+	}, AllowedModels: plan.Models, Budgets: []Budget{{Name: "instance-spend", Limit: Limit{"USD", plan.Budget}, Window: map[string]string{"rolling": plan.Window}, Action: "Block"}}}
 	err = b.gateway(r.Context(), http.MethodPut, "", map[string]any{"resources": []any{map[string]any{"value": key}}}, nil)
 	if err != nil {
 		fail(w, 503, "gateway provisioning failed; retry the request")
@@ -405,7 +461,10 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (b *Broker) catalog(w http.ResponseWriter) {
 	service := map[string]any{
 		"id": b.cfg.ServiceID, "name": "agentgateway", "description": "OpenAI-compatible inference with a shared service-instance spend allowance", "bindable": true, "plan_updateable": false, "instances_retrievable": false, "bindings_retrievable": false,
-		"plans": []any{map[string]any{"id": b.cfg.PlanID, "name": "shared", "description": "Shared API key, model allowlist and best-effort USD allowance", "free": true, "metadata": map[string]any{"models": b.cfg.Models, "usd_allowance": b.cfg.Budget, "window": b.cfg.Window, "accounting": "Post-response, epoch-aligned windows; concurrent requests and replica synchronization can overshoot. Unbind does not revoke the shared key."}}},
+		"plans": []any{},
+	}
+	for _, plan := range b.cfg.InferencePlans {
+		service["plans"] = append(service["plans"].([]any), map[string]any{"id": plan.ID, "name": plan.Name, "description": plan.Description, "free": plan.Free, "metadata": map[string]any{"models": plan.Models, "usd_allowance": plan.Budget, "window": plan.Window, "accounting": "Post-response, epoch-aligned windows; concurrent requests and replica synchronization can overshoot. Unbind does not revoke the shared key."}})
 	}
 	for _, backend := range b.cfg.MCPServers {
 		if backend.PlanID != "" {

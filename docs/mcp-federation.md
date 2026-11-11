@@ -1,11 +1,25 @@
 # MCP service plans and federated backend authentication
 
 Operators can publish one plan per configured HTTP MCP backend through the existing
-`agentgateway` service. Inference retains its existing `shared` plan. A backend
+`agentgateway` service. Inference plans are also operator-defined. A backend
 with `plan_id` is exposed only through broker-created app-binding routes, never
 through the legacy global `/mcp` target list.
 
 ## Operator configuration
+
+`inference_plans` / `INFERENCE_PLANS` defines an array of inference plans, each
+with `id`, `name`, nonblank `description`, `free`, explicit `models`, positive USD
+`budget`, and `window`. Each instance receives the policy of its selected plan.
+An empty array disables inference plans. At least one inference or MCP plan must
+be published. Plan IDs and names must be identifiers and unique across the entire
+service catalog, including both inference and MCP plans. No plan name is reserved:
+`shared` is just the name chosen by the example deployment configuration.
+
+This replaces the launcher's fixed plan ID and the former `MODEL_ALIASES`,
+`USD_ALLOWANCE`, and `BUDGET_WINDOW` settings. Keep existing IDs in configuration
+to preserve OSB plan identity. Do not remove plans before their instances are
+deleted. Existing instance policy remains gateway-owned; editing a plan affects
+new provisions, not existing keys.
 
 `mcp_servers` / `MCP_SERVERS` accepts entries with `name`, stable `plan_id`,
 optional `description`, `url`, optional static `headers`, and `auth`.

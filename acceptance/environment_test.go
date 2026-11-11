@@ -208,10 +208,10 @@ func (e *environment) startBroker() {
 	e.startContainer("broker", map[string]string{
 		"APP_ROLE": "broker", "PORT": strconv.Itoa(e.brokerPort), "BROKER_PASSWORD": brokerPassword,
 		"INSTALLATION": "acceptance", "MANAGEMENT_URL": "http://127.0.0.1:9090", "MANAGEMENT_TOKEN": managementToken,
-		"GATEWAY_URL": fmt.Sprintf("http://127.0.0.1:%d/v1", e.gatewayPort), "MODEL_ALIASES": model,
-		"USD_ALLOWANCE": "20", "BUDGET_WINDOW": "24h",
-		"MCP_SERVERS": jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),
-		"MCP_URL":     fmt.Sprintf("http://127.0.0.1:%d/mcp", e.gatewayPort),
+		"GATEWAY_URL":     fmt.Sprintf("http://127.0.0.1:%d/v1", e.gatewayPort),
+		"INFERENCE_PLANS": jsonString([]any{map[string]any{"id": "eba8b5b0-e8a7-49cb-8188-cfa52ed43bdd", "name": "acceptance-inference", "description": "Acceptance inference allowance", "free": true, "models": []string{model}, "budget": 20, "window": "24h"}}),
+		"MCP_SERVERS":     jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),
+		"MCP_URL":         fmt.Sprintf("http://127.0.0.1:%d/mcp", e.gatewayPort),
 	})
 	Eventually(func() int {
 		return status(http.MethodGet, e.brokerURL()+"/ready", "", "", false)

@@ -46,7 +46,7 @@ func mcpConfig(raw string) (map[string]any, error) {
 	if len(servers) == 0 {
 		return nil, nil
 	}
-	if err := mcpconfig.Validate(servers, ""); err != nil {
+	if err := mcpconfig.Validate(servers); err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}

@@ -86,13 +86,13 @@ func Parse(raw string) ([]Backend, error) {
 	if d.Decode(&extra) != io.EOF {
 		return nil, errors.New("unexpected trailing backend configuration")
 	}
-	if err := Validate(result, ""); err != nil {
+	if err := Validate(result); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
-func Validate(backends []Backend, inferencePlan string) error {
-	names, plans := map[string]bool{}, map[string]bool{inferencePlan: true}
+func Validate(backends []Backend) error {
+	names, plans := map[string]bool{}, map[string]bool{}
 	for _, b := range backends {
 		u, e := url.Parse(b.URL)
 		if !ValidID(b.Name) || names[b.Name] || e != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" {
