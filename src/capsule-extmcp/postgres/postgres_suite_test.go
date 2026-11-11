@@ -110,6 +110,39 @@ var _ = Describe("Durable ledger", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(HaveLen(1))
 	})
+	It("persists signed capsules with full, partial and absent identity attribution", func() {
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		for i, attribution := range []string{
+			`{"service_account":{"issuer":"https://issuer.test","subject":"account"},"selected_identity":{"backend_id":"tools","auth_method":"federated_client_credentials","client_id":"client","authority":"https://tokens.test"}}`,
+			`{"selected_identity":{"auth_method":"passthrough"}}`,
+			`{}`,
+		} {
+			identity := plugin.Identity{Installation: logID, Instance: "one"}
+			Expect(json.Unmarshal([]byte(attribution), &identity)).To(Succeed())
+			record := plugin.Capsule{ID: fmt.Sprintf("attribution-%d", i), Identity: identity, Phase: "planned", Tool: "echo", Backends: []string{"target"}, ObservedAt: time.Now().UTC()}
+			sealed, err := producer.Seal(record, json.RawMessage(`{"name":"echo"}`))
+			Expect(err).NotTo(HaveOccurred())
+			record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+			Expect(store.Save(context.Background(), record)).To(Succeed())
+			Expect(store.Save(context.Background(), record)).To(Succeed())
+			loaded, err := store.Get(context.Background(), record.ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loaded.Identity).To(Equal(identity))
+			for _, altered := range []string{
+				`{"service_account":{"issuer":"https://other.test","subject":"different"}}`,
+				`{"selected_identity":{"client_id":"other-client"}}`,
+			} {
+				changed := record
+				// Decode a fresh value so this test does not share nested objects.
+				data, err := json.Marshal(identity)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(json.Unmarshal(data, &changed.Identity)).To(Succeed())
+				Expect(json.Unmarshal([]byte(altered), &changed.Identity)).To(Succeed())
+				Expect(store.Save(context.Background(), changed)).NotTo(Succeed())
+			}
+		}
+	})
 	It("authorizes only the live binding account and denies tombstoned instances and bindings", func() {
 		ctx := context.Background()
 		// Fixture for the gateway-owned store; the sidecar never creates this in production.
