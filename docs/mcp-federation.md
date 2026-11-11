@@ -83,24 +83,30 @@ digest, with concurrent exchanges coalesced. Expiry is capped by the assertion's
 expiry and token endpoint lifetime with a safety margin. Tokens and assertions
 are not stored in PostgreSQL. Each binding has a distinct MCP target name so
 session state cannot be moved to another binding's backend. Random instance and
-binding generations make target identities distinct after deletion/recreation;
+binding generations make target identities distinct across binding GUIDs;
 the live grant check rejects stale route generations.
 
-Broker-owned `agw_mcp_instances` and `agw_mcp_bindings` tables persist grants,
-instance parameters and backend snapshots. Instance operations are serialized by
-PostgreSQL advisory session locks, retained across grant commit and route cleanup.
-Gateway routes are written through the
-management API and persisted in its normal config store. Bind writes a route
-before committing its grant, so pre-commit requests fail closed. Route resource
-IDs depend only on installation, instance ID and binding ID; target names also
-include the random instance/binding generations. A retry after a lost management
-response or failed grant commit overwrites the same route instead of creating a
-competing route for the binding URL. Orphan unbind can derive the route ID and
-delete it even if no grant was committed or the instance is already absent.
-Unbind and
-deprovision commit revoked tombstones before route cleanup; retries finish cleanup
-without reauthorizing the identity. No cross-store atomic transaction is claimed.
-Back up these grant tables with gateway/capsule state.
+The broker is a stateless OSB translator. It has no database binding, PostgreSQL
+client, schema creation or database locks. Operator configuration supplies the
+catalog; developer selections and lifecycle state are gateway-owned
+`mcp.instance` and `mcp.grant` resources managed through the authenticated API.
+Both use stable installation/OSB IDs and are immutable after creation. A grant
+contains its backend route and metadata in one resource, so publication is a
+single gateway-store transaction rather than a route/grant dual write.
+
+Retries recover the original random generations through the management API,
+including after a lost write response or on another broker replica. Grant
+deletion removes its materialized route; orphan DELETE works even before create
+returns. Gateway-owned tombstones block delayed creates from resurrecting deleted
+IDs. CAPI must allocate a new binding GUID after deletion; reusing deleted IDs is
+rejected. Deprovision deletes the parent instance first, which immediately denies
+its child grants, then deletes remaining grants idempotently.
+
+The loopback authorization sidecar reads these existing gateway resources; it
+does not own a parallel grant store or initialize grant tables. Gateway database
+backups include the authoritative lifecycle resources. CAPI serializes lifecycle
+requests for the same service instance; arbitrary concurrent external writers
+are not part of the broker contract.
 
 Revocation prevents new requests even on replicas retaining an old route. It does
 not cancel an already executing tool or revoke issued provider tokens. Already

@@ -222,7 +222,7 @@ func (s *Store) Authenticate(ctx context.Context, token string) (plugin.Identity
 
 func (s *Store) AuthorizeBinding(ctx context.Context, instance, binding, issuer, subject string) (plugin.Identity, error) {
 	var data []byte
-	err := s.pool.QueryRow(ctx, `SELECT b.value FROM agw_mcp_bindings b JOIN agw_mcp_instances i ON i.installation=b.installation AND i.id=b.instance_id WHERE b.installation=$1 AND b.instance_id=$2 AND b.id=$3 AND NOT coalesce((i.value->>'revoked')::boolean,false)`, s.logID, instance, binding).Scan(&data)
+	err := s.pool.QueryRow(ctx, `SELECT b.value_json->'metadata' FROM agw_config_resources b JOIN agw_config_resources i ON i.kind='mcp.instance' AND i.id=b.value_json->>'instance' AND i.deleted_at IS NULL WHERE b.kind='mcp.grant' AND b.deleted_at IS NULL AND b.value_json->'metadata'->'instance'->>'installation'=$1 AND b.value_json->'metadata'->'instance'->>'id'=$2 AND b.value_json->'metadata'->>'id'=$3`, s.logID, instance, binding).Scan(&data)
 	if err != nil {
 		return plugin.Identity{}, err
 	}

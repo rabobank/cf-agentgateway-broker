@@ -50,7 +50,6 @@ type Config struct {
 	Budget          json.Number         `json:"budget"`
 	Window          string              `json:"window"`
 	MCPServers      []mcpconfig.Backend `json:"mcp_servers,omitempty"`
-	DatabaseURL     string              `json:"database_url,omitempty"`
 }
 
 type Resource struct {
@@ -86,7 +85,6 @@ type Broker struct {
 	cfg       Config
 	client    *http.Client
 	trustedCA string
-	state     *mcpState
 }
 type apiError struct {
 	status  int
@@ -289,13 +287,13 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if b.serveMCP(w, r, parts) {
 		return
 	}
-	if b.state != nil && (r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch) {
-		var exists bool
-		if err := b.state.pool.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM agw_mcp_instances WHERE installation=$1 AND id=$2)", b.cfg.Installation, parts[2]).Scan(&exists); err != nil {
+	if len(b.cfg.MCPServers) > 0 && (r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch) {
+		instance, err := b.instance(r.Context(), parts[2])
+		if err != nil {
 			fail(w, 503, "cannot resolve instance ownership")
 			return
 		}
-		if exists {
+		if instance != nil {
 			fail(w, 409, "instance belongs to another service plan")
 			return
 		}
@@ -438,18 +436,6 @@ func main() {
 	b, err := newBroker(cfg)
 	if err != nil {
 		log.Fatal(err)
-	}
-	if cfg.DatabaseURL != "" {
-		b.state, err = openMCPState(context.Background(), cfg.DatabaseURL, cfg.Installation)
-		if err != nil {
-			log.Fatal("cannot initialize MCP state: ", err)
-		}
-		defer b.state.pool.Close()
-	}
-	for _, backend := range cfg.MCPServers {
-		if backend.PlanID != "" && b.state == nil {
-			log.Fatal("database_url required for MCP plans")
-		}
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

@@ -83,19 +83,6 @@ func run(mode string) error {
 				return err
 			}
 			config.(map[string]any)["mcp_servers"] = servers
-			for _, server := range servers {
-				if server.PlanID != "" {
-					serviceName := os.Getenv("DATABASE_SERVICE_NAME")
-					if serviceName == "" {
-						serviceName = "agentgateway-state"
-					}
-					uri, err := database(required("VCAP_SERVICES"), serviceName)
-					if err != nil {
-						return err
-					}
-					config.(map[string]any)["database_url"] = uri
-				}
-			}
 		}
 		if ca != "" {
 			config.(map[string]any)["trusted_ca_file"] = "config/inference-ca.pem"

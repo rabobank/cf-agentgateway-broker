@@ -168,16 +168,47 @@ var _ = Describe("Gateway metadata round trip", func() {
 			return p
 		}
 		port := free()
-		config := map[string]any{"config": map[string]any{"adminAddr": fmt.Sprintf("127.0.0.1:%d", free()), "readinessAddr": fmt.Sprintf("127.0.0.1:%d", free()), "statsAddr": fmt.Sprintf("127.0.0.1:%d", free()), "session": map[string]string{"key": strings.Repeat("12", 32)}}, "gateways": map[string]any{"inference": map[string]int{"port": port}}, "routes": []any{route}}
+		managementPort := free()
+		config := map[string]any{"config": map[string]any{"adminAddr": fmt.Sprintf("127.0.0.1:%d", free()), "readinessAddr": fmt.Sprintf("127.0.0.1:%d", free()), "statsAddr": fmt.Sprintf("127.0.0.1:%d", free()), "session": map[string]string{"key": strings.Repeat("12", 32)}, "storage": map[string]string{"mode": "hybrid"}, "database": map[string]string{"url": "sqlite:///work/state.db?mode=rwc"}}, "gateways": map[string]any{"inference": map[string]int{"port": port}, "management": map[string]int{"port": managementPort}}, "ui": map[string]any{"gateways": []string{"management"}, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{map[string]string{"key": "management-test"}}}}}}
 		data, err := json.Marshal(config)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(os.WriteFile(filepath.Join(work, "config.json"), data, 0600)).To(Succeed())
 		name := fmt.Sprintf("federation-test-%d", time.Now().UnixNano())
-		cmd := exec.CommandContext(ctx, "docker", "run", "--pull=never", "--rm", "--name", name, "--network", "host", "-v", filepath.Join(root, "cf/dist/gateway")+":/gateway:ro", "-v", work+":/work:ro", "-e", "LD_LIBRARY_PATH=/gateway/lib", "-e", "RUST_MIN_STACK=16777216", runtimeImage, "/gateway/bin/agentgateway", "-f", "/work/config.json")
+		cmd := exec.CommandContext(ctx, "docker", "run", "--pull=never", "--rm", "--name", name, "--network", "host", "-v", filepath.Join(root, "cf/dist/gateway")+":/gateway:ro", "-v", work+":/work", "-e", "LD_LIBRARY_PATH=/gateway/lib", "-e", "RUST_MIN_STACK=16777216", runtimeImage, "/gateway/bin/agentgateway", "-f", "/work/config.json")
 		cmd.Stdout, cmd.Stderr = GinkgoWriter, GinkgoWriter
 		Expect(cmd.Start()).To(Succeed())
 		DeferCleanup(func() { exec.Command("docker", "rm", "-f", name).Run(); cmd.Wait() })
 		client := &http.Client{Timeout: 10 * time.Second}
+		manage := func(method, kind string, value any) (int, string, error) {
+			var body io.Reader
+			if value != nil {
+				data, e := json.Marshal(map[string]any{"resources": []any{map[string]any{"value": value}}})
+				if e != nil {
+					return 0, "", e
+				}
+				body = strings.NewReader(string(data))
+			}
+			req, e := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://127.0.0.1:%d/api/config/resources/%s", managementPort, kind), body)
+			if e != nil {
+				return 0, "", e
+			}
+			req.Header.Set("Authorization", "Bearer management-test")
+			req.Header.Set("Content-Type", "application/json")
+			resp, e := client.Do(req)
+			if e != nil {
+				return 0, "", e
+			}
+			defer resp.Body.Close()
+			raw, e := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(raw), e
+		}
+		Eventually(func() (int, error) { code, _, e := manage("GET", "mcp.instance", nil); return code, e }).WithTimeout(30 * time.Second).Should(Equal(200))
+		code, body, err := manage("PUT", "mcp.instance", map[string]any{"name": "instance", "metadata": binding.Instance})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(200), body)
+		code, body, err = manage("PUT", "mcp.grant", map[string]any{"name": "binding", "instance": "instance", "metadata": binding, "route": route})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(200), body)
 		var session string
 		call := func(jwt, body string) (int, string, error) {
 			req, e := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://127.0.0.1:%d%s", port, binding.Path()), strings.NewReader(body))
@@ -203,7 +234,7 @@ var _ = Describe("Gateway metadata round trip", func() {
 		}
 		initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
 		Eventually(func() (int, error) { code, _, e := call(assertion, initialize); return code, e }).WithTimeout(30 * time.Second).Should(Equal(200))
-		code, body, err := call(assertion, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
+		code, body, err = call(assertion, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(code).To(Equal(200), body)
 		Expect(body).To(ContainSubstring("federated-ok"))
@@ -260,10 +291,9 @@ var _ = Describe("Gateway metadata round trip", func() {
 		otherRoute["policies"] = pol
 		otherTarget := otherRoute["backends"].([]any)[0].(map[string]any)["mcp"].(map[string]any)["targets"].([]any)[0].(map[string]any)
 		otherTarget["policies"] = target["policies"]
-		config["routes"] = []any{route, otherRoute}
-		data, err = json.Marshal(config)
+		code, body, err = manage("PUT", "mcp.grant", map[string]any{"name": "other-binding", "instance": "instance", "metadata": other, "route": otherRoute})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(os.WriteFile(filepath.Join(work, "config.json"), data, 0600)).To(Succeed())
+		Expect(code).To(Equal(200), body)
 		grant.mu.Lock()
 		grant.active = true
 		grant.mu.Unlock()
@@ -301,6 +331,20 @@ var _ = Describe("Gateway metadata round trip", func() {
 			resp.Body.Close()
 			return resp.StatusCode, nil
 		}).WithTimeout(5 * time.Second).Should(Equal(404))
+		// The management API deletes the grant and its route as one resource.
+		code, body, err = manage("DELETE", "mcp.grant/binding", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(200), body)
+		Eventually(func() (int, error) { code, _, e := call(assertion, initialize); return code, e }).WithTimeout(5 * time.Second).Should(Equal(404))
+		code, body, err = manage("PUT", "mcp.grant", map[string]any{"name": "binding", "instance": "instance", "metadata": binding, "route": route})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(409), body)
+		code, body, err = manage("DELETE", "mcp.grant/never-created", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(200), body)
+		code, body, err = manage("PUT", "mcp.grant", map[string]any{"name": "never-created", "instance": "instance", "metadata": binding, "route": route})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(code).To(Equal(409), body)
 	}, NodeTimeout(90*time.Second))
 	It("authenticates and returns the planned capsule ID on the response hook", func(ctx SpecContext) {
 		root, err := filepath.Abs("../../..")
