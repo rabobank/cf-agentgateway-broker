@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -168,6 +169,38 @@ var _ = Describe("Durable ledger", func() {
 		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=NULL WHERE kind='mcp.grant' AND id=$1`, logID)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=now() WHERE kind='mcp.instance' AND id=$1`, logID)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred())
+	})
+	It("authorizes the stable managed grant ID rather than matching unrelated metadata", func() {
+		ctx := context.Background()
+		_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS agw_config_resources (kind text,id text,value_json jsonb,deleted_at timestamptz,PRIMARY KEY(kind,id))`)
+		Expect(err).NotTo(HaveOccurred())
+		id := func(instance, binding string) string {
+			data, e := json.Marshal([]string{logID, instance, binding})
+			Expect(e).NotTo(HaveOccurred())
+			digest := sha256.Sum256(data)
+			return "cf-mcp-" + hex.EncodeToString(digest[:])
+		}
+		parentID, grantID := id("instance", ""), id("instance", "binding")
+		decoyID := logID + "-decoy"
+		grant := mcpconfig.Binding{ID: "binding", Instance: mcpconfig.Instance{ID: "instance", Installation: logID}, Account: mcpconfig.Account{Issuer: "https://issuer.test", Subject: "account"}}
+		parent, _ := json.Marshal(map[string]any{"name": parentID, "metadata": grant.Instance})
+		value, _ := json.Marshal(map[string]any{"name": grantID, "instance": parentID, "metadata": grant})
+		_, err = pool.Exec(ctx, `INSERT INTO agw_config_resources VALUES('mcp.instance',$1,$2,NULL),('mcp.grant',$3,$4,NULL)`, parentID, parent, decoyID, value)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			pool.Exec(ctx, "DELETE FROM agw_config_resources WHERE id IN ($1,$2,$3)", parentID, grantID, decoyID)
+		})
+		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).To(HaveOccurred(), "metadata alone must not select a grant stored under another resource ID")
+		_, err = pool.Exec(ctx, `INSERT INTO agw_config_resources VALUES('mcp.grant',$1,$2,NULL)`, grantID, value)
+		Expect(err).NotTo(HaveOccurred())
+		identity, err := store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(identity.Binding).To(Equal("binding"))
+		_, err = pool.Exec(ctx, `UPDATE agw_config_resources SET deleted_at=now() WHERE kind='mcp.instance' AND id=$1`, parentID)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = store.AuthorizeBinding(ctx, "instance", "binding", "https://issuer.test", "account")
 		Expect(err).To(HaveOccurred())
