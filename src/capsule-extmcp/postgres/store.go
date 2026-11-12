@@ -58,15 +58,25 @@ func Open(ctx context.Context, pool *pgxpool.Pool, logID string, trusted []ed255
 }
 
 func (s *Store) initSchema(ctx context.Context) error {
-	tx, err := s.pool.Begin(ctx)
+	// Lock owners and waiters must not consume the pool upstream Init uses.
+	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = conn.Close(closeCtx)
+	}()
+	// One dedicated session serializes both application and upstream schema DDL.
+	if _, err = conn.Exec(ctx, "SELECT pg_advisory_lock(684119329)"); err != nil {
+		return err
+	}
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	// Serialize schema provisioning between CF sidecars during rolling starts.
-	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(684119329)"); err != nil {
-		return err
-	}
 	_, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS agw_capsule_logs (
  log_id text PRIMARY KEY, entry_count bigint NOT NULL DEFAULT 0,
  state jsonb NOT NULL DEFAULT '{"Size":0,"IndexedSeq":0}');
@@ -95,22 +105,6 @@ CREATE INDEX IF NOT EXISTS agw_capsules_instance_time ON agw_capsules(installati
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	// Upstream initialization is idempotent, but concurrent PostgreSQL DDL needs
-	// serialization across sidecars. Keep this lock outside business transactions.
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		// Destroy the lock-owning session instead of returning it to the pool.
-		_ = conn.Conn().Close(closeCtx)
-		conn.Release()
-	}()
-	if _, err = conn.Exec(ctx, "SELECT pg_advisory_lock(684119329)"); err != nil {
 		return err
 	}
 	if err := s.artifacts.Init(ctx); err != nil {

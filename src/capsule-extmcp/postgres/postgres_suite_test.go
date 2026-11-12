@@ -73,6 +73,37 @@ var _ = Describe("Durable ledger", func() {
 		DeferCleanup(store.Close)
 		Expect(store.Init(context.Background())).To(Succeed())
 	})
+	It("initializes concurrently with a shared one-connection pool", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cfg, err := pgxpool.ParseConfig(uri)
+		Expect(err).NotTo(HaveOccurred())
+		cfg.MaxConns = 1
+		small, err := pgxpool.NewWithConfig(ctx, cfg)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(small.Close)
+		var stores []*postgres.Store
+		for i := 0; i < 4; i++ {
+			current, err := postgres.Open(ctx, small, fmt.Sprintf("init-%s-%d", logID, i), []ed25519.PublicKey{pub})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(current.Close)
+			stores = append(stores, current)
+		}
+		start := make(chan struct{})
+		results := make(chan error, len(stores))
+		for _, current := range stores {
+			go func(s *postgres.Store) {
+				<-start
+				results <- s.Init(ctx)
+			}(current)
+		}
+		close(start)
+		for range stores {
+			Expect(<-results).To(Succeed())
+		}
+		Expect(small.Ping(ctx)).To(Succeed())
+		Expect(small.Stat().AcquiredConns()).To(BeZero())
+	})
 	It("atomically stores a signed capsule and its CLL identity", func() {
 		producer, err := plugin.NewProducer(key)
 		Expect(err).NotTo(HaveOccurred())
