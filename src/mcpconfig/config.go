@@ -105,8 +105,11 @@ func Parse(raw string) ([]Backend, error) {
 	var result []Backend
 	d := json.NewDecoder(strings.NewReader(raw))
 	d.DisallowUnknownFields()
-	if err := d.Decode(&result); err != nil || result == nil {
-		return nil, errors.New("MCP_SERVERS must be an array of backend definitions")
+	if err := d.Decode(&result); err != nil {
+		return nil, JSONError("MCP_SERVERS", err)
+	}
+	if result == nil {
+		return nil, errors.New("MCP_SERVERS must be an array of backend definitions, not null")
 	}
 	var extra any
 	if d.Decode(&extra) != io.EOF {
@@ -117,12 +120,25 @@ func Parse(raw string) ([]Backend, error) {
 	}
 	return result, nil
 }
-func Validate(backends []Backend) error {
+func Validate(backends []Backend) (result error) {
+	index := 0
+	defer func() {
+		if result != nil {
+			result = fmt.Errorf("MCP_SERVERS[%d]: %w", index, result)
+		}
+	}()
 	names, plans := map[string]bool{}, map[string]bool{}
-	for _, b := range backends {
+	for i, b := range backends {
+		index = i
 		u, e := url.Parse(b.URL)
-		if !ValidID(b.Name) || names[b.Name] || e != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" {
-			return errors.New("invalid or duplicate MCP backend")
+		if !ValidID(b.Name) {
+			return errors.New("name must be a 1..128 character identifier using letters, digits, underscores or hyphens, starting with a letter or digit")
+		}
+		if names[b.Name] {
+			return fmt.Errorf("duplicate backend name %q", b.Name)
+		}
+		if e != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" {
+			return errors.New("url must be an HTTP(S) URL with a host and without credentials or fragment")
 		}
 		names[b.Name] = true
 		for k, v := range b.Headers {
@@ -139,12 +155,20 @@ func Validate(backends []Backend) error {
 		if u.Scheme != "https" {
 			return errors.New("plan MCP endpoints must use HTTPS")
 		}
-		if !ValidID(b.PlanID) || plans[b.PlanID] {
-			return errors.New("invalid or duplicate MCP plan ID")
+		if !ValidID(b.PlanID) {
+			return errors.New("plan_id must be a 1..128 character identifier using letters, digits, underscores or hyphens, starting with a letter or digit")
+		}
+		if plans[b.PlanID] {
+			return fmt.Errorf("duplicate plan_id %q", b.PlanID)
 		}
 		plans[b.PlanID] = true
-		if !secureURL(b.Auth.Issuer) || !secureURL(b.Auth.JWKSURL) || b.Auth.Audience == "" {
-			return errors.New("MCP plans require trusted issuer, JWKS URL and audience")
+		for _, field := range []struct{ name, value string }{{"auth.issuer", b.Auth.Issuer}, {"auth.jwks_url", b.Auth.JWKSURL}} {
+			if !secureURL(field.value) {
+				return fmt.Errorf("%s must be an HTTPS URL with a host and without credentials, query or fragment", field.name)
+			}
+		}
+		if b.Auth.Audience == "" {
+			return errors.New("auth.audience is required")
 		}
 		switch b.Auth.Method {
 		case "none", "static", "passthrough":
@@ -203,7 +227,7 @@ func (b Backend) Resolve(params map[string]any) (map[string]string, error) {
 	for k, v := range params {
 		s, ok := v.(string)
 		if !ok || s == "" {
-			return nil, errors.New("instance parameters must be nonempty strings")
+			return nil, fmt.Errorf("instance parameter %q must be a nonempty string", k)
 		}
 		out[k] = s
 	}
@@ -220,7 +244,7 @@ func (b Backend) Resolve(params map[string]any) (map[string]string, error) {
 	for k := range out {
 		if k != "client_id" {
 			if _, ok := b.Auth.Parameters[k]; !ok {
-				return nil, errors.New("unknown instance parameter")
+				return nil, fmt.Errorf("unknown instance parameter %q; use client_id and operator-declared identity parameters only", k)
 			}
 		}
 	}

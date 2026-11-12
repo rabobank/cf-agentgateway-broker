@@ -216,14 +216,22 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		return true
 	}
 	app, ok := req.BindResource["app_guid"].(string)
-	if !ok || app == "" || req.Context["platform"] != "cloudfoundry" {
-		fail(w, 422, "app service account required")
+	if !ok || app == "" {
+		fail(w, 422, "bind_resource.app_guid is required; create an app binding with trusted service-account context")
+		return true
+	}
+	if req.Context["platform"] != "cloudfoundry" {
+		fail(w, 422, "context.platform must be cloudfoundry for an app service-account binding")
 		return true
 	}
 	binding := mcpconfig.Binding{ID: parts[4], Instance: *instance}
 	account, _ := json.Marshal(req.Context["service_account"])
-	if json.Unmarshal(account, &binding.Account) != nil || binding.Account.Issuer != instance.Backend.Auth.Issuer || binding.Account.Subject == "" {
-		fail(w, 422, "trusted service account required")
+	if json.Unmarshal(account, &binding.Account) != nil || binding.Account.Subject == "" {
+		fail(w, 422, "context.service_account must contain a nonempty subject and a trusted issuer")
+		return true
+	}
+	if binding.Account.Issuer != instance.Backend.Auth.Issuer {
+		fail(w, 422, "context.service_account.issuer must match the plan's configured auth.issuer")
 		return true
 	}
 	raw, err := b.managed(ctx, "mcp.grant", grantID)

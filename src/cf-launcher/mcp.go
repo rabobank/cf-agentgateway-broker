@@ -38,7 +38,7 @@ func mcpConfig(raw string) (map[string]any, error) {
 	}
 	var servers []mcpServer
 	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
-		return nil, errors.New("MCP_SERVERS must be a JSON array")
+		return nil, mcpconfig.JSONError("MCP_SERVERS", err)
 	}
 	if servers == nil {
 		return nil, errors.New("MCP_SERVERS must be a JSON array, not null")
