@@ -4,8 +4,8 @@ github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAw
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/action-state-group/agent-action-capsule/go v0.7.0 h1:Vi2cN7a5jbX4oWuDpxRifzAu3qgb3OEEybxkPf176Aw=
 github.com/action-state-group/agent-action-capsule/go v0.7.0/go.mod h1:miJnjbceLMHON1PmfHKRjqlNSsy95k6qZ1jz1j3KR84=
-github.com/action-state-group/capsule-emit/go v0.3.0 h1:DEFDSHktFQoUxWScjeIbMKfET/4Kjgm/ZQsWJp4AI+Y=
-github.com/action-state-group/capsule-emit/go v0.3.0/go.mod h1:TKXiVniDy7RlksGjEAF6k9rj5NcwvwdQ6EGajzhghuo=
+github.com/action-state-group/capsule-emit/go v0.4.0 h1:ZUKRBE2PT75WUjR0rskTPFOz1ujNMMhZMzfbu00Eapo=
+github.com/action-state-group/capsule-emit/go v0.4.0/go.mod h1:TKXiVniDy7RlksGjEAF6k9rj5NcwvwdQ6EGajzhghuo=
 github.com/action-state-group/checkpointed-local-log/go v0.3.0 h1:vT7HEljD2jOm9CQqZPStSFe0+n9lS6EdtBC24wTdwkM=
 github.com/action-state-group/checkpointed-local-log/go v0.3.0/go.mod h1:zyHyXVNqA4pMTJ14xtcRoDHZF0n4QyjS5KMDD3KwQ2Q=
 github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 h1:aBangftG7EVZoUb69Os8IaYg++6uMOdKK83QtkkvJik=

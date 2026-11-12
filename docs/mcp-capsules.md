@@ -40,14 +40,22 @@ recording error does not undo a tool action that already executed.
 
 ## Persistence and checkpoints
 
-Request/result digest preimages use the versioned wrapper
-`{"encoding":"mcp-json-bytes/base64/v1","data":"<standard padded base64>"}`.
-The data is the exact JSON bytes observed on the ExtMcp wire. This losslessly
-supports decimal and large integer values while keeping the digest preimage
-within AAC's string-only numeric-safe profile. The same wrapper is used for
-input/output and effect-response digests; `gateway.body_encoding` identifies it
-in the signed capsule. Whitespace or numeric spelling changes therefore change
-the commitment. Original bodies are not retained, including their base64 form.
+Request/result bodies are decoded with `Decoder.UseNumber`, converted with
+capsule-emit v0.4.0's `CanonicalizeForDigest`, and committed with `DigestJSON`.
+The same canonicalized value supplies input/output and effect-response digests.
+Signed metadata identifies this format as
+`gateway.body_encoding: "mcp-json/canonicalize-for-digest/v1"`.
+
+Decimal and exponent tokens become RFC 8785 decimal strings: `0.5` and `0.50`
+become `"0.5"`, and `-0.0` becomes `"0"`. Numeric `0.5` and string `"0.5"`
+therefore have the same digest. Integer tokens stay integers; `1` and `1.0`
+digest differently. Whitespace and object-member order do not affect digests.
+Integer tokens outside ±(2^53−1) and numbers overflowing binary64 are rejected.
+Original bodies and their canonicalized values are not retained.
+
+Earlier pre-production capsules used `mcp-json-bytes/base64/v1`, which committed
+exact JSON bytes. Their signed `body_encoding` identifies that older format;
+existing capsules are not rewritten.
 
 The sidecar shares the gateway database and initializes its own additive tables:
 
@@ -67,10 +75,11 @@ The Go Action State libraries create/verify capsules, build the MMR, sign
 checkpoints, and submit/verify witness receipts. The PostgreSQL backend implements
 the public CLL contract and uses the public memory backend to validate state
 transitions. Its format is application-owned; this is not the upstream MySQL DDL
-and cannot be opened directly with that driver. The pinned capsule library
-v0.3.0 provides artifact verification but does not publish the newer `artifact.Store`
-interface documented on upstream main; capsule persistence uses our repository
-interface and the pinned verification primitives.
+and cannot be opened directly with that driver. Capsule persistence uses our
+repository interface and capsule-emit v0.4.0 verification primitives rather than
+the upstream `artifact.Store` interface. Adoption of an upstream PostgreSQL
+artifact backend is deferred pending
+[capsule-emit #454](https://github.com/action-state-group/capsule-emit/issues/454).
 
 One sidecar owns a PostgreSQL session advisory lock per log and runs background
 checkpoint and witness workers. Other sidecars keep appending normally. Workers

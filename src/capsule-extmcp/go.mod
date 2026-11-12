@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	cf-mcp-config v0.0.0
-	github.com/action-state-group/capsule-emit/go v0.3.0
+	github.com/action-state-group/capsule-emit/go v0.4.0
 	github.com/action-state-group/checkpointed-local-log/go v0.3.0
 	github.com/agentgateway/agentgateway/api v0.0.0
 	github.com/fxamacker/cbor/v2 v2.9.1
