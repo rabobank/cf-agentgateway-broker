@@ -4,7 +4,6 @@ import (
 	"cf-agentgateway-capsule/plugin"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	emit "github.com/action-state-group/capsule-emit/go"
 	. "github.com/onsi/ginkgo/v2"
@@ -13,14 +12,13 @@ import (
 )
 
 var _ = Describe("Signed capsules", func() {
-	It("losslessly commits decimals and arbitrary JSON integers in requests and results", func() {
+	It("commits upstream-canonicalized numbers in requests and results", func() {
 		_, key, err := ed25519.GenerateKey(rand.Reader)
 		Expect(err).NotTo(HaveOccurred())
 		producer, err := plugin.NewProducer(key)
 		Expect(err).NotTo(HaveOccurred())
-		body := json.RawMessage(`{"temperature":0.5,"large":9007199254740993,"exponent":1e100,"negativeZero":-0.0,"string":"0.5"}`)
-		wrapper := map[string]string{"encoding": "mcp-json-bytes/base64/v1", "data": base64.StdEncoding.EncodeToString(body)}
-		digest, err := emit.DigestJSON(wrapper)
+		body := json.RawMessage(`{"temperature":0.5,"large":9007199254740991,"nested":[1e21,-0.0,1.0,1]}`)
+		digest, err := emit.DigestJSON(json.RawMessage(`{"temperature":"0.5","large":9007199254740991,"nested":["1e+21","0","1",1]}`))
 		Expect(err).NotTo(HaveOccurred())
 		record := plugin.Capsule{ID: "numbers", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
 		plan, err := producer.Seal(record, body)
@@ -29,6 +27,7 @@ var _ = Describe("Signed capsules", func() {
 		Expect(json.Unmarshal(plan.Payload, &content)).To(Succeed())
 		compute := content["model_attestation"].(map[string]any)["compute_attestation"].(map[string]any)
 		Expect(compute["agent_input_digest"]).To(Equal(digest))
+		Expect(content["gateway"].(map[string]any)["body_encoding"]).To(Equal("mcp-json/canonicalize-for-digest/v1"))
 		record.ID = "numbers/outcome"
 		record.Parent = plan.CapsuleID
 		record.Phase = "confirmed"
@@ -41,12 +40,93 @@ var _ = Describe("Signed capsules", func() {
 		check, err := emit.VerifyCapsule(outcome.Payload)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(check.OK).To(BeTrue())
-		decoded, err := base64.StdEncoding.DecodeString(wrapper["data"])
+		for _, changedBody := range []string{
+			`{"temperature":"0.5","large":9007199254740991,"nested":[1e21,-0.0,1.0,1]}`,
+			`{"temperature":0.50,"large":9007199254740991,"nested":[1e21,-0.0,1.0,1]}`,
+			`{ "nested":[1e21,-0.0,1.0,1], "large":9007199254740991,"temperature":0.5 }`,
+		} {
+			changed, err := producer.Seal(record, json.RawMessage(changedBody))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed.CapsuleID).To(Equal(outcome.CapsuleID))
+		}
+	})
+	It("rejects unsafe integer tokens, overflowing numbers and invalid JSON", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(decoded).To(Equal([]byte(body)))
-		changed, err := producer.Seal(record, json.RawMessage(`{"temperature":"0.5"}`))
+		producer, err := plugin.NewProducer(key)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(changed.CapsuleID).NotTo(Equal(outcome.CapsuleID))
+		record := plugin.Capsule{ID: "invalid", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		for _, body := range []string{
+			`{"large":9007199254740993}`, // UseNumber must prevent rounding into a float.
+			`{"large":-9007199254740992}`,
+			`{"nested":[1e999]}`,
+			`{"temperature":`,
+			`{} {}`,
+		} {
+			sealed, err := producer.Seal(record, json.RawMessage(body))
+			Expect(err).To(HaveOccurred(), body)
+			Expect(sealed).To(BeZero())
+		}
+	})
+	It("rejects duplicate names and invalid Unicode before decoding requests and results", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "strict-json", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		plan, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		for _, parent := range []string{"", plan.CapsuleID} {
+			record.Parent = parent
+			if parent != "" {
+				record.Phase = "confirmed"
+			}
+			for _, body := range []string{
+				`{"v":9007199254740993,"v":1}`,
+				`{"nested":[{"v":1,"v":2}]}`,
+				`{"nested":{"v":1,"\u0076":2}}`,
+				`{"v":"\ud800"}`,
+				`{"nested":["\udc00"]}`,
+				`{"\ud800":1}`,
+				"{\"v\":\"\xff\"}",
+				"{\"\xff\":1}",
+			} {
+				sealed, err := producer.Seal(record, json.RawMessage(body))
+				Expect(err).To(MatchError(ContainSubstring("unique object names and valid Unicode")), "%q", body)
+				Expect(sealed).To(BeZero())
+			}
+		}
+	})
+	It("accepts valid Unicode and repeated names in separate objects", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "unicode", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		body := json.RawMessage(`{"nested":[{"v":"\ud83d\ude00"},{"v":"é"}],"replacement":"\ufffd"}`)
+		sealed, err := producer.Seal(record, body)
+		Expect(err).NotTo(HaveOccurred())
+		digest, err := emit.DigestJSON(body)
+		Expect(err).NotTo(HaveOccurred())
+		var content map[string]any
+		Expect(json.Unmarshal(sealed.Payload, &content)).To(Succeed())
+		compute := content["model_attestation"].(map[string]any)["compute_attestation"].(map[string]any)
+		Expect(compute["agent_input_digest"]).To(Equal(digest))
+	})
+	It("includes a digest for JSON null bodies", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "null", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`null`))
+		Expect(err).NotTo(HaveOccurred())
+		digest, err := emit.DigestJSON(json.RawMessage(`null`))
+		Expect(err).NotTo(HaveOccurred())
+		var content map[string]any
+		Expect(json.Unmarshal(sealed.Payload, &content)).To(Succeed())
+		compute := content["model_attestation"].(map[string]any)["compute_attestation"].(map[string]any)
+		Expect(compute["agent_input_digest"]).To(Equal(digest))
 	})
 	It("commits the service instance and links a verifiable outcome", func() {
 		pub, key, err := ed25519.GenerateKey(rand.Reader)
