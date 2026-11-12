@@ -168,7 +168,7 @@ func (c Config) validate() error {
 	if c.MCPURL != "" {
 		u, err := url.Parse(c.MCPURL)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
-			return errors.New("invalid MCP URL")
+			return errors.New(fmt.Sprintf("invalid MCP URL: %v", err))
 		}
 	}
 	for name, value := range map[string]string{"listen": c.Listen, "username": c.Username, "password": c.Password, "installation": c.Installation, "service_id": c.ServiceID} {
@@ -179,7 +179,7 @@ func (c Config) validate() error {
 	for _, value := range []string{c.GatewayURL, c.ManagementURL} {
 		u, err := url.Parse(value)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("invalid gateway URL")
+			return errors.New(fmt.Sprintf("invalid gateway URL: %v", err))
 		}
 	}
 	if (c.Certificate == "") != (c.PrivateKey == "") {
@@ -212,7 +212,7 @@ func newBroker(c Config) (*Broker, error) {
 	if c.TrustedCAFile != "" {
 		pem, err := os.ReadFile(c.TrustedCAFile)
 		if err != nil {
-			return nil, errors.New("cannot read inference trust CA")
+			return nil, errors.New(fmt.Sprintf("cannot read inference trust CA: %v", err))
 		}
 		if !x509.NewCertPool().AppendCertsFromPEM(pem) {
 			return nil, errors.New("invalid inference trust CA")
@@ -245,7 +245,7 @@ func (b *Broker) management(ctx context.Context, method, kind, path string, body
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return errors.New("gateway management request failed")
+		return errors.New(fmt.Sprintf("gateway management request failed: %v", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -482,7 +482,7 @@ func main() {
 	flag.Parse()
 	f, err := os.Open(*path)
 	if err != nil {
-		log.Fatal("cannot open configuration")
+		log.Fatalf("cannot open configuration: %s", err)
 	}
 	defer f.Close()
 	var cfg Config
@@ -490,18 +490,18 @@ func main() {
 	dec.UseNumber()
 	dec.DisallowUnknownFields()
 	if err = dec.Decode(&cfg); err != nil {
-		log.Fatal("invalid configuration")
+		log.Fatalf("invalid configuration: %s", err)
 	}
 	b, err := newBroker(cfg)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to create broker: %s", err)
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to listen on %s: %s", cfg.Listen, err)
 	}
 	go func() {
 		<-ctx.Done()
@@ -516,6 +516,6 @@ func main() {
 		err = server.Serve(listener)
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal("broker server failed")
+		log.Fatalf("broker server failed: %s", err)
 	}
 }
