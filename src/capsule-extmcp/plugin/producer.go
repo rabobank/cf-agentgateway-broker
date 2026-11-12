@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	emit "github.com/action-state-group/capsule-emit/go"
 )
@@ -19,8 +20,9 @@ func NewProducer(key ed25519.PrivateKey) (*SignedProducer, error) {
 }
 
 func (p *SignedProducer) Seal(record Capsule, body json.RawMessage) (emit.Result, error) {
-	if !json.Valid(body) {
-		return emit.Result{}, errors.New("MCP body must be valid JSON")
+	// Validate before decoding can collapse duplicate names or replace invalid Unicode.
+	if !jsontext.Value(body).IsValid() {
+		return emit.Result{}, errors.New("MCP body must be valid JSON with unique object names and valid Unicode")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()

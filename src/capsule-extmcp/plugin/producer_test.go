@@ -68,6 +68,51 @@ var _ = Describe("Signed capsules", func() {
 			Expect(sealed).To(BeZero())
 		}
 	})
+	It("rejects duplicate names and invalid Unicode before decoding requests and results", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "strict-json", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		plan, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		for _, parent := range []string{"", plan.CapsuleID} {
+			record.Parent = parent
+			if parent != "" {
+				record.Phase = "confirmed"
+			}
+			for _, body := range []string{
+				`{"v":9007199254740993,"v":1}`,
+				`{"nested":[{"v":1,"v":2}]}`,
+				`{"nested":{"v":1,"\u0076":2}}`,
+				`{"v":"\ud800"}`,
+				`{"nested":["\udc00"]}`,
+				`{"\ud800":1}`,
+				"{\"v\":\"\xff\"}",
+				"{\"\xff\":1}",
+			} {
+				sealed, err := producer.Seal(record, json.RawMessage(body))
+				Expect(err).To(MatchError(ContainSubstring("unique object names and valid Unicode")), "%q", body)
+				Expect(sealed).To(BeZero())
+			}
+		}
+	})
+	It("accepts valid Unicode and repeated names in separate objects", func() {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "unicode", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		body := json.RawMessage(`{"nested":[{"v":"\ud83d\ude00"},{"v":"é"}],"replacement":"\ufffd"}`)
+		sealed, err := producer.Seal(record, body)
+		Expect(err).NotTo(HaveOccurred())
+		digest, err := emit.DigestJSON(body)
+		Expect(err).NotTo(HaveOccurred())
+		var content map[string]any
+		Expect(json.Unmarshal(sealed.Payload, &content)).To(Succeed())
+		compute := content["model_attestation"].(map[string]any)["compute_attestation"].(map[string]any)
+		Expect(compute["agent_input_digest"]).To(Equal(digest))
+	})
 	It("includes a digest for JSON null bodies", func() {
 		_, key, err := ed25519.GenerateKey(rand.Reader)
 		Expect(err).NotTo(HaveOccurred())
