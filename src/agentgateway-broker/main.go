@@ -179,7 +179,7 @@ func (c Config) validate() error {
 	for _, value := range []string{c.GatewayURL, c.ManagementURL} {
 		u, err := url.Parse(value)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New(fmt.Sprintf("invalid gateway URL: %v", err))
+			return errors.New("invalid gateway URL: expected a parseable HTTP(S) URL with a host and without credentials, query, or fragment")
 		}
 	}
 	if (c.Certificate == "") != (c.PrivateKey == "") {
