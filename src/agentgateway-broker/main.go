@@ -260,7 +260,11 @@ func (b *Broker) management(ctx context.Context, method, kind, path string, body
 		return &apiError{resp.StatusCode, fmt.Sprintf("gateway management request rejected: HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))}
 	}
 	if out != nil {
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out); err != nil {
+		body := &responseReader{Reader: io.LimitReader(resp.Body, 16<<20)}
+		if err := json.NewDecoder(body).Decode(out); err != nil {
+			if body.err != nil {
+				return fmt.Errorf("read management response: %w", transportCause(body.err))
+			}
 			return mcpconfig.JSONError("decode management response", err)
 		}
 		return nil
@@ -270,6 +274,21 @@ func (b *Broker) management(ctx context.Context, method, kind, path string, body
 		return fmt.Errorf("read management response: %w", transportCause(err))
 	}
 	return nil
+}
+
+// Keep body-read failures separate from JSON errors, including opaque transport
+// errors that must not be echoed. EOF is normal input termination for the decoder.
+type responseReader struct {
+	io.Reader
+	err error
+}
+
+func (r *responseReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil && err != io.EOF {
+		r.err = err
+	}
+	return n, err
 }
 
 type diagnosticRequestKey struct{}

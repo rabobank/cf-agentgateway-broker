@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -42,6 +44,53 @@ func TestManagementFailureIsObservableWithoutSecrets(t *testing.T) {
 	}
 	if strings.Count(logs.String(), "gateway management method=") != 1 {
 		t.Fatalf("expected one diagnostic: %s", &logs)
+	}
+}
+
+type failingResponseReader func([]byte) (int, error)
+
+func (f failingResponseReader) Read(p []byte) (int, error) { return f(p) }
+
+func TestManagementResponseBodyTransportErrors(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+		want  error
+	}{
+		{"canceled", context.Canceled, context.Canceled},
+		{"deadline", context.DeadlineExceeded, context.DeadlineExceeded},
+		{"connection reset", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, syscall.ECONNRESET},
+		{"opaque transport failure", errors.New("secret-response-transport"), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			b, _ := fixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			readFailure := failingResponseReader(func([]byte) (int, error) {
+				if test.cause == context.Canceled {
+					cancel()
+					return 0, ctx.Err()
+				}
+				return 0, test.cause
+			})
+			b.client.Transport = diagnosticTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(io.MultiReader(strings.NewReader(`{"resources":[`), readFailure))}, nil
+			})
+			var logs bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logs)
+			defer log.SetOutput(previous)
+			_, err := b.find(ctx, "instance")
+			if err == nil || !strings.Contains(err.Error(), "read management response") {
+				t.Fatalf("expected body transport diagnostic, got %v", err)
+			}
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("lost transport classification %v: %v", test.want, err)
+			}
+			if strings.Contains(logs.String(), "JSON") || strings.Contains(logs.String(), "secret-response") {
+				t.Fatalf("unsafe or misleading transport diagnostic: %s", &logs)
+			}
+		})
 	}
 }
 
