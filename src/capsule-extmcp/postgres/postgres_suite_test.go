@@ -8,9 +8,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/action-state-group/capsule-emit/go/artifact"
+	artifactpg "github.com/action-state-group/capsule-emit/go/artifact/postgres"
 	"github.com/action-state-group/checkpointed-local-log/go/checkpoint"
 	"github.com/action-state-group/checkpointed-local-log/go/cll"
 	"github.com/action-state-group/checkpointed-local-log/go/mmr"
@@ -67,6 +70,7 @@ var _ = Describe("Durable ledger", func() {
 		var err error
 		store, err = postgres.Open(context.Background(), pool, logID, []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(store.Close)
 		Expect(store.Init(context.Background())).To(Succeed())
 	})
 	It("atomically stores a signed capsule and its CLL identity", func() {
@@ -85,6 +89,22 @@ var _ = Describe("Durable ledger", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(loaded.Identity).To(Equal(record.Identity))
 		Expect(loaded.Bytes).To(Equal(record.Bytes))
+		Expect(loaded.Envelope).To(Equal(record.Envelope))
+		// Reopen on another handle and read exact signed bytes through upstream.
+		db, err := sql.Open("pgx", uri)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(db.Close)
+		namespace := sha256.Sum256([]byte(logID))
+		upstream, err := artifactpg.New(db, hex.EncodeToString(namespace[:]), []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		stored, err := upstream.Get(context.Background(), record.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored.Capsule).To(Equal(record.Bytes))
+		Expect(stored.ProducerEnvelope).To(Equal(record.Envelope))
+		Expect(stored.Artifacts).To(BeEmpty())
+		var retained bool
+		Expect(pool.QueryRow(context.Background(), "SELECT record->>'Bytes' IS NOT NULL OR record->>'Envelope' IS NOT NULL FROM agw_capsules WHERE log_id=$1 AND capsule_id=$2", logID, record.ID).Scan(&retained)).To(Succeed())
+		Expect(retained).To(BeFalse())
 		signer, err := checkpoint.NewEd25519Signer(key)
 		Expect(err).NotTo(HaveOccurred())
 		cfg := checkpoint.DefaultRunnerConfig(logID)
@@ -233,10 +253,91 @@ var _ = Describe("Durable ledger", func() {
 		count, err := store.EntryCount(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero())
+		Expect(pool.QueryRow(context.Background(), "SELECT count(*) FROM capsule_store_capsules WHERE capsule_id=$1", record.ID).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero(), "artifact insertion must roll back with the application index and CLL")
+	})
+	It("rolls back application and CLL writes when upstream rejects a conflicting artifact", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "conflict", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		db, err := sql.Open("pgx", uri)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(db.Close)
+		namespace := sha256.Sum256([]byte(logID))
+		upstream, err := artifactpg.New(db, hex.EncodeToString(namespace[:]), []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(upstream.Put(ctx, artifact.Record{CapsuleID: record.ID, Capsule: record.Bytes, ProducerEnvelope: record.Envelope, Artifacts: []artifact.Artifact{{Name: "payload", Binding: artifact.PayloadDigest, State: artifact.NeverRetained}}})).To(Succeed())
+		Expect(store.Save(ctx, record)).To(MatchError(artifact.ErrConflict))
+		count, err := store.EntryCount(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(BeZero())
+		var rows int
+		Expect(pool.QueryRow(ctx, "SELECT count(*) FROM agw_capsules WHERE log_id=$1", logID).Scan(&rows)).To(Succeed())
+		Expect(rows).To(BeZero())
+	})
+	It("fails closed on upstream artifact corruption", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "corrupt", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		Expect(store.Save(ctx, record)).To(Succeed())
+		_, err = pool.Exec(ctx, "UPDATE capsule_store_capsules SET capsule_bytes=$2 WHERE capsule_id=$1", record.ID, []byte(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		loaded, err := store.Get(ctx, record.ID)
+		Expect(err).To(HaveOccurred())
+		Expect(loaded).To(BeZero())
+	})
+	It("migrates legacy signed bytes without changing CLL coordinates and resumes idempotently", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "legacy", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		id, err := hex.DecodeString(record.ID)
+		Expect(err).NotTo(HaveOccurred())
+		original, err := store.Append(ctx, cll.AppendInput{Value: id, AppendedAt: record.ObservedAt})
+		Expect(err).NotTo(HaveOccurred())
+		raw, err := json.Marshal(record)
+		Expect(err).NotTo(HaveOccurred())
+		sum := sha256.Sum256(raw)
+		_, err = pool.Exec(ctx, `INSERT INTO agw_capsules(log_id,capsule_id,installation,instance_id,observed_at,record,checksum) VALUES($1,$2,$3,$4,$5,$6,$7)`, logID, record.ID, record.Identity.Installation, record.Identity.Instance, record.ObservedAt, raw, hex.EncodeToString(sum[:]))
+		Expect(err).NotTo(HaveOccurred())
+		reopened, err := postgres.Open(ctx, pool, logID, []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(reopened.Close)
+		Expect(reopened.Init(ctx)).To(Succeed())
+		Expect(reopened.Init(ctx)).To(Succeed())
+		loaded, err := reopened.Get(ctx, record.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Bytes).To(Equal(record.Bytes))
+		Expect(loaded.Envelope).To(Equal(record.Envelope))
+		Expect(reopened.Save(ctx, record)).To(Succeed())
+		entries, err := reopened.ScanEntries(ctx, 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entries).To(Equal([]cll.Entry{original.Entry}))
+	})
+	It("keeps legacy evidence intact if migration cannot verify its checksum", func() {
+		ctx := context.Background()
+		_, err := pool.Exec(ctx, `INSERT INTO agw_capsules(log_id,capsule_id,installation,instance_id,observed_at,record,checksum) VALUES($1,'bad','lab','one',now(),'{"ID":"bad","Bytes":"e30="}','wrong')`, logID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(store.Init(ctx)).To(MatchError(artifact.ErrCorrupt))
+		var bytes string
+		Expect(pool.QueryRow(ctx, "SELECT record->>'Bytes' FROM agw_capsules WHERE log_id=$1", logID).Scan(&bytes)).To(Succeed())
+		Expect(bytes).To(Equal("e30="))
 	})
 	It("allocates dense sequence numbers across independent handles", func() {
 		other, err := postgres.Open(context.Background(), pool, logID, []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(other.Close)
 		errors := make(chan error, 20)
 		for i := 0; i < 20; i++ {
 			go func(i int) {
@@ -260,12 +361,42 @@ var _ = Describe("Durable ledger", func() {
 			Expect(entry.Seq).To(Equal(uint64(i + 1)))
 		}
 	})
+	It("serializes concurrent byte-identical saves across sidecars without duplicate CLL entries", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "retry", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		other, err := postgres.Open(ctx, pool, logID, []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(other.Close)
+		results := make(chan error, 12)
+		for i := 0; i < cap(results); i++ {
+			current := store
+			if i%2 == 0 {
+				current = other
+			}
+			go func(s *postgres.Store) { results <- s.Save(ctx, record) }(current)
+		}
+		for i := 0; i < cap(results); i++ {
+			Expect(<-results).To(Succeed())
+		}
+		count, err := other.EntryCount(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(Equal(uint64(1)))
+		loaded, err := other.Get(ctx, record.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Bytes).To(Equal(record.Bytes))
+	})
 	It("records overlapping outcomes on a different sidecar without mispairing", func() {
 		ctx := context.Background()
 		producer, err := plugin.NewProducer(key)
 		Expect(err).NotTo(HaveOccurred())
 		other, err := postgres.Open(ctx, pool, logID, []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(other.Close)
 		server := plugin.NewServer(other, producer)
 		plans := make([]string, 12)
 		for i := range plans {

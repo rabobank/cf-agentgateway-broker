@@ -41,7 +41,7 @@ recording error does not undo a tool action that already executed.
 ## Persistence and checkpoints
 
 Request/result bodies are decoded with `Decoder.UseNumber`, converted with
-capsule-emit v0.4.0's `CanonicalizeForDigest`, and committed with `DigestJSON`.
+capsule-emit's `CanonicalizeForDigest`, and committed with `DigestJSON`.
 The same canonicalized value supplies input/output and effect-response digests.
 Signed metadata identifies this format as
 `gateway.body_encoding: "mcp-json/canonicalize-for-digest/v1"`.
@@ -59,27 +59,49 @@ existing capsules are not rewritten.
 
 The sidecar shares the gateway database and initializes its own additive tables:
 
-- `agw_capsules`: exact signed capsule/envelope bytes within a JSON storage
-  record, checksum, indexed installation/instance/time, and parent reference.
+- `capsule_store_capsules` / `capsule_store_artifacts`: upstream capsule-emit
+  v0.5.0 PostgreSQL artifact storage, with exact signed bytes, envelope, inventory
+  checksum, and original-retention support. The sidecar supplies no originals.
+- `agw_capsules`: application metadata only, checksum, indexed
+  installation/instance/time, and parent reference.
 - `agw_capsule_entries`: dense ordered 32-byte capsule IDs and append times.
 - `agw_capsule_logs`: durable log cursor and checkpoint metadata.
 - `agw_capsule_nodes`: append-only MMR nodes.
 - `agw_capsule_witnesses`: durable delivery attempts and verified receipts.
 
-Capsule persistence and CLL append commit in one transaction. Duplicate byte-
-identical writes preserve their original CLL position. No gateway tables are
+Upstream `PutTx`, application metadata, and CLL append commit in one READ COMMITTED
+`database/sql` transaction. The SQL handle uses pgx's stdlib adapter over the
+sidecar's existing connection pool; native pgx remains in use for authorization,
+checkpoint state, and leadership. Duplicate byte-identical writes preserve their
+original CLL position. No gateway tables are
 modified by the sidecar. Database roles need CREATE TABLE/INDEX privileges for
 initial provisioning. Back up these tables together with gateway configuration.
 
 The Go Action State libraries create/verify capsules, build the MMR, sign
 checkpoints, and submit/verify witness receipts. The PostgreSQL backend implements
 the public CLL contract and uses the public memory backend to validate state
-transitions. Its format is application-owned; this is not the upstream MySQL DDL
-and cannot be opened directly with that driver. Capsule persistence uses our
-repository interface and capsule-emit v0.4.0 verification primitives rather than
-the upstream `artifact.Store` interface. Adoption of an upstream PostgreSQL
-artifact backend is deferred pending
+transitions. CLL storage remains application-owned. Signed artifact persistence
+uses the upstream `artifact/postgres` implementation of `artifact.Store` and
+`artifact.TxStore`, delivered in
 [capsule-emit #454](https://github.com/action-state-group/capsule-emit/issues/454).
+The artifact namespace is the lowercase hexadecimal SHA-256 of `CAPSULE_LOG_ID`,
+explicitly giving each producer log its own artifact collection. The application
+repository validates indexed attribution against the signed Capsule on save/read;
+it does not expose general padding or purge operations. The test suite runs both
+the CLL and artifact shared conformance suites against disposable PostgreSQL.
+
+### Upgrading from application-owned artifact storage
+
+Stop old sidecars before starting this version; mixed-version rolling operation
+is not supported because old writers/readers expect embedded signed bytes in
+`agw_capsules`. On startup, the sidecar verifies each legacy record's checksum,
+signed metadata and producer envelope, inserts its exact signed bytes through
+upstream `PutTx`, and replaces the embedded bytes with metadata only in the same
+transaction. Migration is per log and per record, resumable and idempotent. It
+does not reseal capsules, append CLL entries, or change checkpoints or witnesses.
+Invalid evidence stops startup and leaves the affected legacy row intact.
+Back up all capsule and CLL tables together before upgrading. An older binary
+cannot read migrated rows; rollback requires restoring the matching backup.
 
 One sidecar owns a PostgreSQL session advisory lock per log and runs background
 checkpoint and witness workers. Other sidecars keep appending normally. Workers
