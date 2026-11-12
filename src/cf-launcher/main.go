@@ -43,7 +43,7 @@ func database(raw, serviceName string) (string, error) {
 					if uri, ok := s.Credentials[field].(string); ok {
 						u, e := url.Parse(uri)
 						if e != nil || u.Host == "" || !(u.Scheme == "postgres" || u.Scheme == "postgresql") {
-							return "", errors.New("invalid PostgreSQL URI")
+							return "", errors.New("invalid PostgreSQL URI: expected a parseable postgres/postgresql URL with a host")
 						}
 						return uri, nil
 					}
@@ -101,11 +101,11 @@ func run(mode string) error {
 		}
 		var models any
 		if e = json.Unmarshal([]byte(required("GATEWAY_MODELS")), &models); e != nil {
-			return errors.New("invalid GATEWAY_MODELS JSON")
+			return errors.New(fmt.Sprintf("invalid GATEWAY_MODELS JSON: %v", e))
 		}
 		var catalog any
 		if e = json.Unmarshal([]byte(required("MODEL_CATALOG")), &catalog); e != nil {
-			return errors.New("invalid MODEL_CATALOG JSON")
+			return errors.New(fmt.Sprintf("invalid MODEL_CATALOG JSON: %v", e))
 		}
 		path, e := filepath.Abs(save("config/catalog.json", catalog))
 		if e != nil {
@@ -133,7 +133,7 @@ func run(mode string) error {
 }
 func main() {
 	if e := run(required("APP_ROLE")); e != nil {
-		fmt.Fprintln(os.Stderr, e)
+		fmt.Printf("failed to launch binary: %v\n", e)
 		os.Exit(1)
 	}
 }
