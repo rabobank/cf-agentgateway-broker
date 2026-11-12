@@ -57,7 +57,7 @@ func Open(ctx context.Context, pool *pgxpool.Pool, logID string, trusted []ed255
 	return &Store{pool: pool, db: db, artifacts: artifacts, logID: logID}, nil
 }
 
-func (s *Store) initSchema(ctx context.Context) error {
+func (s *Store) Init(ctx context.Context) error {
 	// Lock owners and waiters must not consume the pool upstream Init uses.
 	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
 	if err != nil {
@@ -111,13 +111,6 @@ CREATE INDEX IF NOT EXISTS agw_capsules_instance_time ON agw_capsules(installati
 		return err
 	}
 	return nil
-}
-
-func (s *Store) Init(ctx context.Context) error {
-	if err := s.initSchema(ctx); err != nil {
-		return err
-	}
-	return s.migrateArtifacts(ctx)
 }
 
 func (s *Store) check(ctx context.Context) error {
@@ -255,69 +248,6 @@ func (s *Store) Get(ctx context.Context, id string) (plugin.Capsule, error) {
 		return plugin.Capsule{}, err
 	}
 	return c, nil
-}
-
-// migrateArtifacts moves only this log's legacy evidence into the upstream
-// store, retaining the application index and every existing CLL coordinate.
-// Each record is independently atomic and a restart resumes unfinished rows.
-func (s *Store) migrateArtifacts(ctx context.Context) error {
-	for {
-		moved, err := s.migrateArtifact(ctx)
-		if err != nil {
-			return err
-		}
-		if !moved {
-			return nil
-		}
-	}
-}
-
-func (s *Store) migrateArtifact(ctx context.Context) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "SELECT entry_count FROM agw_capsule_logs WHERE log_id=$1 FOR UPDATE", s.logID); err != nil {
-		return false, err
-	}
-	var id, checksum string
-	var raw []byte
-	err = tx.QueryRowContext(ctx, `SELECT capsule_id,record,checksum FROM agw_capsules WHERE log_id=$1 AND record->>'Bytes' IS NOT NULL ORDER BY capsule_id LIMIT 1 FOR UPDATE`, s.logID).Scan(&id, &raw, &checksum)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	var c plugin.Capsule
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return false, err
-	}
-	canonical, err := json.Marshal(c)
-	if err != nil {
-		return false, err
-	}
-	sum := sha256.Sum256(canonical)
-	if c.ID != id || hex.EncodeToString(sum[:]) != checksum {
-		return false, artifact.ErrCorrupt
-	}
-	if err := validateMetadata(c); err != nil {
-		return false, err
-	}
-	if err := s.artifacts.PutTx(ctx, tx, artifact.Record{CapsuleID: c.ID, Capsule: c.Bytes, ProducerEnvelope: c.Envelope}); err != nil {
-		return false, err
-	}
-	c.Bytes, c.Envelope = nil, nil
-	raw, err = json.Marshal(c)
-	if err != nil {
-		return false, err
-	}
-	sum = sha256.Sum256(raw)
-	if _, err := tx.ExecContext(ctx, "UPDATE agw_capsules SET record=$3,checksum=$4 WHERE log_id=$1 AND capsule_id=$2", s.logID, id, raw, hex.EncodeToString(sum[:])); err != nil {
-		return false, err
-	}
-	return true, tx.Commit()
 }
 
 func (s *Store) Authenticate(ctx context.Context, token string) (plugin.Identity, error) {

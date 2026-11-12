@@ -90,18 +90,14 @@ repository validates indexed attribution against the signed Capsule on save/read
 it does not expose general padding or purge operations. The test suite runs both
 the CLL and artifact shared conformance suites against disposable PostgreSQL.
 
-### Upgrading from application-owned artifact storage
+### Pre-production storage cutover
 
-Stop old sidecars before starting this version; mixed-version rolling operation
-is not supported because old writers/readers expect embedded signed bytes in
-`agw_capsules`. On startup, the sidecar verifies each legacy record's checksum,
-signed metadata and producer envelope, inserts its exact signed bytes through
-upstream `PutTx`, and replaces the embedded bytes with metadata only in the same
-transaction. Migration is per log and per record, resumable and idempotent. It
-does not reseal capsules, append CLL entries, or change checkpoints or witnesses.
-Invalid evidence stops startup and leaves the affected legacy row intact.
-Back up all capsule and CLL tables together before upgrading. An older binary
-cannot read migrated rows; rollback requires restoring the matching backup.
+This is a breaking change from the previous application-owned artifact format;
+there is no migration or backward-compatible reader. Stop old sidecars and start
+with an empty capsule evidence store, resetting the capsule application and CLL
+tables together. Preserve gateway configuration and its managed lifecycle
+resources. Old evidence can be archived separately, but is not imported by the
+sidecar. Do not mix old and new sidecar versions against the same evidence store.
 
 One sidecar owns a PostgreSQL session advisory lock per log and runs background
 checkpoint and witness workers. Other sidecars keep appending normally. Workers
