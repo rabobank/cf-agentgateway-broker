@@ -129,26 +129,26 @@ func (c Config) validate() error {
 		ids[id], names[name] = true, true
 		return nil
 	}
-	for _, plan := range c.InferencePlans {
+	for i, plan := range c.InferencePlans {
 		if err := add(plan.ID, plan.Name); err != nil {
-			return err
+			return fmt.Errorf("inference_plans[%d]: %w", i, err)
 		}
 		if strings.TrimSpace(plan.Description) == "" {
-			return errors.New("inference plan description is required")
+			return fmt.Errorf("inference_plans[%d].description is required", i)
 		}
 		amount, err := plan.Budget.Float64()
 		if err != nil || amount <= 0 {
-			return errors.New("positive USD budget is required")
+			return fmt.Errorf("inference_plans[%d].budget must be a positive USD amount", i)
 		}
 		if plan.Window == "" {
-			return errors.New("inference plan window is required")
+			return fmt.Errorf("inference_plans[%d].window is required", i)
 		}
 		if len(plan.Models) == 0 {
-			return errors.New("model allowlist is required")
+			return fmt.Errorf("inference_plans[%d].models must contain at least one explicit model alias", i)
 		}
-		for _, model := range plan.Models {
+		for j, model := range plan.Models {
 			if model == "" || strings.Contains(model, "*") {
-				return errors.New("model aliases must be explicit")
+				return fmt.Errorf("inference_plans[%d].models[%d] must be nonempty and contain no wildcard", i, j)
 			}
 		}
 	}
@@ -176,10 +176,10 @@ func (c Config) validate() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	for _, value := range []string{c.GatewayURL, c.ManagementURL} {
+	for name, value := range map[string]string{"gateway_url": c.GatewayURL, "management_url": c.ManagementURL} {
 		u, err := url.Parse(value)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("invalid gateway URL: expected a parseable HTTP(S) URL with a host and without credentials, query, or fragment")
+			return fmt.Errorf("invalid %s: expected a parseable HTTP(S) URL with a host and without credentials, query, or fragment", name)
 		}
 	}
 	if (c.Certificate == "") != (c.PrivateKey == "") {
@@ -199,10 +199,10 @@ func newBroker(c Config) (*Broker, error) {
 		}
 		pem, err := os.ReadFile(c.CAFile)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read management ca_file: %w", err)
 		}
 		if !roots.AppendCertsFromPEM(pem) {
-			return nil, errors.New("invalid management CA")
+			return nil, fmt.Errorf("management ca_file %q: no PEM certificates found", c.CAFile)
 		}
 		tlsConfig.RootCAs = roots
 	}
@@ -212,10 +212,10 @@ func newBroker(c Config) (*Broker, error) {
 	if c.TrustedCAFile != "" {
 		pem, err := os.ReadFile(c.TrustedCAFile)
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("cannot read inference trust CA: %v", err))
+			return nil, fmt.Errorf("read inference trusted_ca_file: %w", err)
 		}
 		if !x509.NewCertPool().AppendCertsFromPEM(pem) {
-			return nil, errors.New("invalid inference trust CA")
+			return nil, fmt.Errorf("inference trusted_ca_file %q: no PEM certificates found", c.TrustedCAFile)
 		}
 		trustedCA = string(pem)
 	}
@@ -224,18 +224,26 @@ func newBroker(c Config) (*Broker, error) {
 func (b *Broker) gateway(ctx context.Context, method, path string, body any, out any) error {
 	return b.management(ctx, method, "llm.apiKey", path, body, out)
 }
-func (b *Broker) management(ctx context.Context, method, kind, path string, body any, out any) error {
+func (b *Broker) management(ctx context.Context, method, kind, path string, body any, out any) (result error) {
+	// This is the single diagnostic boundary for management operations. Public
+	// handlers retain safe OSB responses; never log payloads, headers or URLs here.
+	defer func() {
+		if result != nil {
+			requestID, _ := ctx.Value(diagnosticRequestKey{}).(string)
+			log.Printf("gateway management method=%s kind=%s resource=%q osb_request=%q: %v", method, kind, path, requestID, result)
+		}
+	}()
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return mcpconfig.JSONError("encode management request", err)
 		}
 		reader = bytes.NewReader(data)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(b.cfg.ManagementURL, "/")+"/api/config/resources/"+kind+path, reader)
 	if err != nil {
-		return err
+		return errors.New("construct management request: invalid method or URL")
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -245,17 +253,60 @@ func (b *Broker) management(ctx context.Context, method, kind, path string, body
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return errors.New(fmt.Sprintf("gateway management request failed: %v", err))
+		return fmt.Errorf("gateway management request failed: %w", transportCause(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &apiError{resp.StatusCode, "gateway management request rejected"}
+		return &apiError{resp.StatusCode, fmt.Sprintf("gateway management request rejected: HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))}
 	}
 	if out != nil {
-		return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out); err != nil {
+			return mcpconfig.JSONError("decode management response", err)
+		}
+		return nil
 	}
 	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<20))
-	return err
+	if err != nil {
+		return fmt.Errorf("read management response: %w", transportCause(err))
+	}
+	return nil
+}
+
+type diagnosticRequestKey struct{}
+
+// url.Error includes the full request URL. TLS errors can include certificate
+// identities. Keep useful failure classes without logging credential-bearing data.
+func transportCause(err error) error {
+	var u *url.Error
+	if errors.As(err, &u) {
+		return transportCause(u.Err)
+	}
+	var op *net.OpError
+	if errors.As(err, &op) {
+		return transportCause(op.Err)
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return errors.New("DNS lookup failed")
+	}
+	var system *os.SyscallError
+	if errors.As(err, &system) {
+		return transportCause(system.Err)
+	}
+	for _, known := range []error{context.Canceled, context.DeadlineExceeded, syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ETIMEDOUT, io.EOF, io.ErrUnexpectedEOF} {
+		if errors.Is(err, known) {
+			return known
+		}
+	}
+	var cert *tls.CertificateVerificationError
+	if errors.As(err, &cert) {
+		return errors.New("TLS certificate verification failed; check ca_file and management_url hostname")
+	}
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return context.DeadlineExceeded
+	}
+	return errors.New("transport failure (check management endpoint and TLS configuration)")
 }
 func (b *Broker) find(ctx context.Context, id string) (*Resource, error) {
 	var list struct {
@@ -335,6 +386,12 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "not found")
 		return
 	}
+	// Only the validated OSB identifiers are retained, never URL query values.
+	requestID := parts[2]
+	if len(parts) == 5 && parts[3] == "service_bindings" && resourceID.MatchString(parts[4]) {
+		requestID += "/" + parts[4]
+	}
+	r = r.WithContext(context.WithValue(r.Context(), diagnosticRequestKey{}, requestID))
 	if b.serveMCP(w, r, parts) {
 		return
 	}

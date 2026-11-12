@@ -1,6 +1,7 @@
 package main
 
 import (
+	mcpconfig "cf-mcp-config"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,7 +35,7 @@ func database(raw, serviceName string) (string, error) {
 		Credentials map[string]any `json:"credentials"`
 	}
 	if err := json.Unmarshal([]byte(raw), &services); err != nil {
-		return "", err
+		return "", mcpconfig.JSONError("VCAP_SERVICES", err)
 	}
 	for _, group := range services {
 		for _, s := range group {
@@ -43,20 +44,21 @@ func database(raw, serviceName string) (string, error) {
 					if uri, ok := s.Credentials[field].(string); ok {
 						u, e := url.Parse(uri)
 						if e != nil || u.Host == "" || !(u.Scheme == "postgres" || u.Scheme == "postgresql") {
-							return "", errors.New("invalid PostgreSQL URI: expected a parseable postgres/postgresql URL with a host")
+							return "", fmt.Errorf("PostgreSQL binding %q credentials.%s: expected a parseable postgres/postgresql URL with a host", serviceName, field)
 						}
 						return uri, nil
 					}
 				}
+				return "", fmt.Errorf("PostgreSQL binding %q: credentials.uri or credentials.url must be a string", serviceName)
 			}
 		}
 	}
-	return "", fmt.Errorf("%s PostgreSQL binding with uri is required", serviceName)
+	return "", fmt.Errorf("PostgreSQL binding %q not found in VCAP_SERVICES; bind the configured DATABASE_SERVICE_NAME", serviceName)
 }
 func run(mode string) error {
 	port, e := strconv.Atoi(required("PORT"))
 	if e != nil || port < 1 || port > 65535 {
-		return errors.New("invalid PORT")
+		return errors.New("PORT must be an integer in 1..65535")
 	}
 	if e = os.MkdirAll("config", 0700); e != nil {
 		return e
@@ -71,8 +73,11 @@ func run(mode string) error {
 	switch mode {
 	case "broker":
 		var plans []map[string]any
-		if err := json.Unmarshal([]byte(required("INFERENCE_PLANS")), &plans); err != nil || plans == nil {
-			return errors.New("INFERENCE_PLANS must be a JSON array")
+		if err := json.Unmarshal([]byte(required("INFERENCE_PLANS")), &plans); err != nil {
+			return mcpconfig.JSONError("INFERENCE_PLANS", err)
+		}
+		if plans == nil {
+			return errors.New("INFERENCE_PLANS must be a JSON array, not null")
 		}
 		config = map[string]any{"listen": fmt.Sprintf("0.0.0.0:%d", port), "username": "broker", "password": required("BROKER_PASSWORD"), "installation": required("INSTALLATION"), "gateway_url": required("GATEWAY_URL"), "management_url": required("MANAGEMENT_URL"), "management_token": required("MANAGEMENT_TOKEN"), "service_id": "1b0b97a6-41df-4a39-9b23-53f17a5f85be", "inference_plans": plans}
 		mcp, err := mcpConfig(os.Getenv("MCP_SERVERS"))
@@ -101,11 +106,11 @@ func run(mode string) error {
 		}
 		var models any
 		if e = json.Unmarshal([]byte(required("GATEWAY_MODELS")), &models); e != nil {
-			return errors.New(fmt.Sprintf("invalid GATEWAY_MODELS JSON: %v", e))
+			return mcpconfig.JSONError("GATEWAY_MODELS", e)
 		}
 		var catalog any
 		if e = json.Unmarshal([]byte(required("MODEL_CATALOG")), &catalog); e != nil {
-			return errors.New(fmt.Sprintf("invalid MODEL_CATALOG JSON: %v", e))
+			return mcpconfig.JSONError("MODEL_CATALOG", e)
 		}
 		path, e := filepath.Abs(save("config/catalog.json", catalog))
 		if e != nil {
@@ -129,11 +134,14 @@ func run(mode string) error {
 	if e = os.Setenv("LD_LIBRARY_PATH", "lib"); e != nil {
 		return e
 	}
-	return syscall.Exec(binary, args, os.Environ())
+	if err := syscall.Exec(binary, args, os.Environ()); err != nil {
+		return fmt.Errorf("execute %q: %w", binary, err)
+	}
+	return nil
 }
 func main() {
 	if e := run(required("APP_ROLE")); e != nil {
-		fmt.Printf("failed to launch binary: %v\n", e)
+		fmt.Fprintf(os.Stderr, "failed to launch binary: %v\n", e)
 		os.Exit(1)
 	}
 }
