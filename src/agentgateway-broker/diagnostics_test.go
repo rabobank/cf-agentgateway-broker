@@ -91,3 +91,45 @@ func TestTransportCausePreservesCancellation(t *testing.T) {
 		t.Fatalf("cancellation classification lost: %v", err)
 	}
 }
+
+func TestURLValidationDiagnosticsExcludeSecrets(t *testing.T) {
+	b, _ := fixture(t)
+	for _, field := range []string{"mcp_url", "gateway_url", "management_url"} {
+		for _, invalid := range []struct{ name, value string }{
+			{"invalid port", "https://secret-user:secret-password@host:invalid/?token=secret-query#secret-fragment"},
+			{"invalid escape", "https://host/%zz?token=secret-query"},
+			{"credentials", "https://secret-user:secret-password@host/path"},
+			{"query", "https://host/path?token=secret-query"},
+			{"fragment", "https://host/path#secret-fragment"},
+			{"missing host", "https:///secret-path"},
+			{"unsupported scheme", "file://host/secret-path"},
+		} {
+			t.Run(field+"/"+invalid.name, func(t *testing.T) {
+				cfg := b.cfg
+				label := field
+				switch field {
+				case "mcp_url":
+					cfg.MCPURL = invalid.value
+					label = "MCP URL"
+				case "gateway_url":
+					cfg.GatewayURL = invalid.value
+				case "management_url":
+					cfg.ManagementURL = invalid.value
+				}
+				_, err := newBroker(cfg)
+				if err == nil {
+					t.Fatal("invalid URL accepted")
+				}
+				message := err.Error()
+				for _, expected := range []string{label, "HTTP(S)", "host", "credentials, query, or fragment"} {
+					if !strings.Contains(message, expected) {
+						t.Errorf("missing requirement %q: %s", expected, message)
+					}
+				}
+				if strings.Contains(message, "secret-") || strings.Contains(message, "<nil>") || strings.Contains(message, invalid.value) {
+					t.Fatalf("unsafe or misleading URL diagnostic: %s", message)
+				}
+			})
+		}
+	}
+}
