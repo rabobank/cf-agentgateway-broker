@@ -8,9 +8,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/action-state-group/capsule-emit/go/artifact"
+	artifactpg "github.com/action-state-group/capsule-emit/go/artifact/postgres"
 	"github.com/action-state-group/checkpointed-local-log/go/checkpoint"
 	"github.com/action-state-group/checkpointed-local-log/go/cll"
 	"github.com/action-state-group/checkpointed-local-log/go/mmr"
@@ -67,7 +70,39 @@ var _ = Describe("Durable ledger", func() {
 		var err error
 		store, err = postgres.Open(context.Background(), pool, logID, []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(store.Close)
 		Expect(store.Init(context.Background())).To(Succeed())
+	})
+	It("initializes concurrently with a shared one-connection pool", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cfg, err := pgxpool.ParseConfig(uri)
+		Expect(err).NotTo(HaveOccurred())
+		cfg.MaxConns = 1
+		small, err := pgxpool.NewWithConfig(ctx, cfg)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(small.Close)
+		var stores []*postgres.Store
+		for i := 0; i < 4; i++ {
+			current, err := postgres.Open(ctx, small, fmt.Sprintf("init-%s-%d", logID, i), []ed25519.PublicKey{pub})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(current.Close)
+			stores = append(stores, current)
+		}
+		start := make(chan struct{})
+		results := make(chan error, len(stores))
+		for _, current := range stores {
+			go func(s *postgres.Store) {
+				<-start
+				results <- s.Init(ctx)
+			}(current)
+		}
+		close(start)
+		for range stores {
+			Expect(<-results).To(Succeed())
+		}
+		Expect(small.Ping(ctx)).To(Succeed())
+		Expect(small.Stat().AcquiredConns()).To(BeZero())
 	})
 	It("atomically stores a signed capsule and its CLL identity", func() {
 		producer, err := plugin.NewProducer(key)
@@ -85,6 +120,22 @@ var _ = Describe("Durable ledger", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(loaded.Identity).To(Equal(record.Identity))
 		Expect(loaded.Bytes).To(Equal(record.Bytes))
+		Expect(loaded.Envelope).To(Equal(record.Envelope))
+		// Reopen on another handle and read exact signed bytes through upstream.
+		db, err := sql.Open("pgx", uri)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(db.Close)
+		namespace := sha256.Sum256([]byte(logID))
+		upstream, err := artifactpg.New(db, hex.EncodeToString(namespace[:]), []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		stored, err := upstream.Get(context.Background(), record.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored.Capsule).To(Equal(record.Bytes))
+		Expect(stored.ProducerEnvelope).To(Equal(record.Envelope))
+		Expect(stored.Artifacts).To(BeEmpty())
+		var retained bool
+		Expect(pool.QueryRow(context.Background(), "SELECT record->>'Bytes' IS NOT NULL OR record->>'Envelope' IS NOT NULL FROM agw_capsules WHERE log_id=$1 AND capsule_id=$2", logID, record.ID).Scan(&retained)).To(Succeed())
+		Expect(retained).To(BeFalse())
 		signer, err := checkpoint.NewEd25519Signer(key)
 		Expect(err).NotTo(HaveOccurred())
 		cfg := checkpoint.DefaultRunnerConfig(logID)
@@ -233,10 +284,51 @@ var _ = Describe("Durable ledger", func() {
 		count, err := store.EntryCount(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero())
+		Expect(pool.QueryRow(context.Background(), "SELECT count(*) FROM capsule_store_capsules WHERE capsule_id=$1", record.ID).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero(), "artifact insertion must roll back with the application index and CLL")
+	})
+	It("rolls back application and CLL writes when upstream rejects a conflicting artifact", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "conflict", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		db, err := sql.Open("pgx", uri)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(db.Close)
+		namespace := sha256.Sum256([]byte(logID))
+		upstream, err := artifactpg.New(db, hex.EncodeToString(namespace[:]), []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(upstream.Put(ctx, artifact.Record{CapsuleID: record.ID, Capsule: record.Bytes, ProducerEnvelope: record.Envelope, Artifacts: []artifact.Artifact{{Name: "payload", Binding: artifact.PayloadDigest, State: artifact.NeverRetained}}})).To(Succeed())
+		Expect(store.Save(ctx, record)).To(MatchError(artifact.ErrConflict))
+		count, err := store.EntryCount(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(BeZero())
+		var rows int
+		Expect(pool.QueryRow(ctx, "SELECT count(*) FROM agw_capsules WHERE log_id=$1", logID).Scan(&rows)).To(Succeed())
+		Expect(rows).To(BeZero())
+	})
+	It("fails closed on upstream artifact corruption", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "corrupt", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		Expect(store.Save(ctx, record)).To(Succeed())
+		_, err = pool.Exec(ctx, "UPDATE capsule_store_capsules SET capsule_bytes=$2 WHERE capsule_id=$1", record.ID, []byte(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		loaded, err := store.Get(ctx, record.ID)
+		Expect(err).To(HaveOccurred())
+		Expect(loaded).To(BeZero())
 	})
 	It("allocates dense sequence numbers across independent handles", func() {
 		other, err := postgres.Open(context.Background(), pool, logID, []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(other.Close)
 		errors := make(chan error, 20)
 		for i := 0; i < 20; i++ {
 			go func(i int) {
@@ -260,12 +352,42 @@ var _ = Describe("Durable ledger", func() {
 			Expect(entry.Seq).To(Equal(uint64(i + 1)))
 		}
 	})
+	It("serializes concurrent byte-identical saves across sidecars without duplicate CLL entries", func() {
+		ctx := context.Background()
+		producer, err := plugin.NewProducer(key)
+		Expect(err).NotTo(HaveOccurred())
+		record := plugin.Capsule{ID: "retry", Identity: plugin.Identity{Installation: "lab", Instance: "one"}, Phase: "planned", Tool: "echo", Backends: []string{"test"}, ObservedAt: time.Now().UTC()}
+		sealed, err := producer.Seal(record, json.RawMessage(`{}`))
+		Expect(err).NotTo(HaveOccurred())
+		record.ID, record.Bytes, record.Envelope = sealed.CapsuleID, sealed.Payload, sealed.Envelope
+		other, err := postgres.Open(ctx, pool, logID, []ed25519.PublicKey{pub})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(other.Close)
+		results := make(chan error, 12)
+		for i := 0; i < cap(results); i++ {
+			current := store
+			if i%2 == 0 {
+				current = other
+			}
+			go func(s *postgres.Store) { results <- s.Save(ctx, record) }(current)
+		}
+		for i := 0; i < cap(results); i++ {
+			Expect(<-results).To(Succeed())
+		}
+		count, err := other.EntryCount(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(Equal(uint64(1)))
+		loaded, err := other.Get(ctx, record.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Bytes).To(Equal(record.Bytes))
+	})
 	It("records overlapping outcomes on a different sidecar without mispairing", func() {
 		ctx := context.Background()
 		producer, err := plugin.NewProducer(key)
 		Expect(err).NotTo(HaveOccurred())
 		other, err := postgres.Open(ctx, pool, logID, []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(other.Close)
 		server := plugin.NewServer(other, producer)
 		plans := make([]string, 12)
 		for i := range plans {

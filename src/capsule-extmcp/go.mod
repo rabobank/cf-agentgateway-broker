@@ -4,11 +4,11 @@ go 1.27.0
 
 require (
 	cf-mcp-config v0.0.0
-	github.com/action-state-group/capsule-emit/go v0.4.0
+	github.com/action-state-group/capsule-emit/go v0.5.0
 	github.com/action-state-group/checkpointed-local-log/go v0.3.0
 	github.com/agentgateway/agentgateway/api v0.0.0
 	github.com/fxamacker/cbor/v2 v2.9.1
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	github.com/veraison/go-cose v1.3.0
@@ -18,7 +18,7 @@ require (
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
-	github.com/action-state-group/agent-action-capsule/go v0.7.0 // indirect
+	github.com/action-state-group/agent-action-capsule/go v0.21.0 // indirect
 	github.com/datatrails/go-datatrails-merklelog/mmr v0.4.2-0.20250428132117-275103a34a08 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
@@ -27,7 +27,7 @@ require (
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/maxbrunsfeld/counterfeiter/v6 v6.14.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240409071808-615f978279ca // indirect
 	github.com/stretchr/testify v1.12.1 // indirect

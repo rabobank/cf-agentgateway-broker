@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,17 +20,20 @@ import (
 
 	"cf-agentgateway-capsule/plugin"
 	"github.com/action-state-group/capsule-emit/go/artifact"
+	artifactpg "github.com/action-state-group/capsule-emit/go/artifact/postgres"
 	"github.com/action-state-group/checkpointed-local-log/go/cll"
 	"github.com/action-state-group/checkpointed-local-log/go/store/memory"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 type Store struct {
-	pool    *pgxpool.Pool
-	logID   string
-	trusted []ed25519.PublicKey
-	closed  atomic.Bool
+	pool      *pgxpool.Pool
+	db        *sql.DB
+	artifacts *artifactpg.Store
+	logID     string
+	closed    atomic.Bool
 }
 
 func (s *Store) LogID() string { return s.logID }
@@ -41,19 +45,38 @@ func Open(ctx context.Context, pool *pgxpool.Pool, logID string, trusted []ed255
 	if err := pool.Ping(ctx); err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool, logID: logID, trusted: trusted}, nil
+	db := stdlib.OpenDBFromPool(pool)
+	// Explicitly scope artifacts to this producer log, with a portable namespace
+	// even when the CLL identifier exceeds the artifact namespace's 64-byte limit.
+	sum := sha256.Sum256([]byte(logID))
+	artifacts, err := artifactpg.New(db, hex.EncodeToString(sum[:]), trusted)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{pool: pool, db: db, artifacts: artifacts, logID: logID}, nil
 }
 
 func (s *Store) Init(ctx context.Context) error {
-	tx, err := s.pool.Begin(ctx)
+	// Lock owners and waiters must not consume the pool upstream Init uses.
+	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = conn.Close(closeCtx)
+	}()
+	// One dedicated session serializes both application and upstream schema DDL.
+	if _, err = conn.Exec(ctx, "SELECT pg_advisory_lock(684119329)"); err != nil {
+		return err
+	}
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	// Serialize schema provisioning between CF sidecars during rolling starts.
-	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(684119329)"); err != nil {
-		return err
-	}
 	_, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS agw_capsule_logs (
  log_id text PRIMARY KEY, entry_count bigint NOT NULL DEFAULT 0,
  state jsonb NOT NULL DEFAULT '{"Size":0,"IndexedSeq":0}');
@@ -81,7 +104,13 @@ CREATE INDEX IF NOT EXISTS agw_capsules_instance_time ON agw_capsules(installati
 	if _, err = tx.Exec(ctx, "INSERT INTO agw_capsule_logs(log_id) VALUES($1) ON CONFLICT DO NOTHING", s.logID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if err := s.artifacts.Init(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) check(ctx context.Context) error {
@@ -93,16 +122,20 @@ func (s *Store) check(ctx context.Context) error {
 	}
 	return nil
 }
-func (s *Store) Close() error { s.closed.Store(true); return nil }
+func (s *Store) Close() error { s.closed.Store(true); return s.db.Close() }
 
 func (s *Store) Save(ctx context.Context, c plugin.Capsule) error {
 	if err := s.check(ctx); err != nil {
 		return err
 	}
-	if _, err := artifact.Verify(artifact.Record{CapsuleID: c.ID, Capsule: c.Bytes, ProducerEnvelope: c.Envelope}, s.trusted); err != nil {
+	if err := validateMetadata(c); err != nil {
 		return err
 	}
-	// The indexed identity is derived from signed content, never caller labels.
+	return s.save(ctx, c)
+}
+
+// The indexed identity is derived from signed content, never caller labels.
+func validateMetadata(c plugin.Capsule) error {
 	var payload struct {
 		Gateway struct {
 			plugin.Identity
@@ -124,29 +157,42 @@ func (s *Store) Save(ctx context.Context, c plugin.Capsule) error {
 	if payload.Chain.Parent != c.Parent || !payload.Timestamp.Equal(c.ObservedAt.Truncate(time.Microsecond)) {
 		return artifact.ErrInvalid
 	}
+	return nil
+}
+
+func (s *Store) save(ctx context.Context, c plugin.Capsule) error {
+	record := artifact.Record{CapsuleID: c.ID, Capsule: c.Bytes, ProducerEnvelope: c.Envelope}
+	c.Bytes, c.Envelope = nil, nil
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
 	sum := sha256.Sum256(raw)
 	checksum := hex.EncodeToString(sum[:])
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
+	// Lock order is always CLL log row, then upstream artifact rows.
+	if _, err := tx.ExecContext(ctx, "SELECT entry_count FROM agw_capsule_logs WHERE log_id=$1 FOR UPDATE", s.logID); err != nil {
+		return err
+	}
+	if err := s.artifacts.PutTx(ctx, tx, record); err != nil {
+		return err
+	}
 	var existing string
-	err = tx.QueryRow(ctx, "SELECT checksum FROM agw_capsules WHERE log_id=$1 AND capsule_id=$2", s.logID, c.ID).Scan(&existing)
+	err = tx.QueryRowContext(ctx, "SELECT checksum FROM agw_capsules WHERE log_id=$1 AND capsule_id=$2", s.logID, c.ID).Scan(&existing)
 	if err == nil {
 		if existing != checksum {
 			return artifact.ErrConflict
 		}
-		return tx.Commit(ctx)
+		return tx.Commit()
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	// Allocate the CLL sequence first so retries serialize on the same log row.
+	// Append under the same log lock and transaction as the artifact write.
 	id, err := hex.DecodeString(c.ID)
 	if err != nil {
 		return err
@@ -158,18 +204,18 @@ func (s *Store) Save(ctx context.Context, c plugin.Capsule) error {
 	if c.Parent != "" {
 		parent = c.Parent
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO agw_capsules(log_id,capsule_id,installation,instance_id,observed_at,parent_id,record,checksum)
+	_, err = tx.ExecContext(ctx, `INSERT INTO agw_capsules(log_id,capsule_id,installation,instance_id,observed_at,parent_id,record,checksum)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(log_id,capsule_id) DO NOTHING`, s.logID, c.ID, c.Identity.Installation, c.Identity.Instance, c.ObservedAt, parent, raw, checksum)
 	if err != nil {
 		return err
 	}
-	if err = tx.QueryRow(ctx, "SELECT checksum FROM agw_capsules WHERE log_id=$1 AND capsule_id=$2", s.logID, c.ID).Scan(&existing); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT checksum FROM agw_capsules WHERE log_id=$1 AND capsule_id=$2", s.logID, c.ID).Scan(&existing); err != nil {
 		return err
 	}
 	if existing != checksum {
 		return artifact.ErrConflict
 	}
-	return tx.Commit(ctx)
+	return tx.Commit()
 }
 
 func (s *Store) Get(ctx context.Context, id string) (plugin.Capsule, error) {
@@ -193,8 +239,15 @@ func (s *Store) Get(ctx context.Context, id string) (plugin.Capsule, error) {
 	if hex.EncodeToString(sum[:]) != checksum || c.ID != id {
 		return plugin.Capsule{}, artifact.ErrCorrupt
 	}
-	_, err = artifact.Verify(artifact.Record{CapsuleID: c.ID, Capsule: c.Bytes, ProducerEnvelope: c.Envelope}, s.trusted)
-	return c, err
+	record, err := s.artifacts.Get(ctx, id)
+	if err != nil {
+		return plugin.Capsule{}, err
+	}
+	c.Bytes, c.Envelope = record.Capsule, record.ProducerEnvelope
+	if err := validateMetadata(c); err != nil {
+		return plugin.Capsule{}, err
+	}
+	return c, nil
 }
 
 func (s *Store) Authenticate(ctx context.Context, token string) (plugin.Identity, error) {
@@ -240,29 +293,32 @@ func validTime(t time.Time) bool {
 	return t.UnixMilli() >= cll.MinPortableUnixMillis && t.UnixMilli() <= cll.MaxPortableUnixMillis
 }
 
-func (s *Store) appendTx(ctx context.Context, tx pgx.Tx, in cll.AppendInput) (cll.AppendResult, error) {
+func (s *Store) appendTx(ctx context.Context, tx *sql.Tx, in cll.AppendInput) (cll.AppendResult, error) {
 	if len(in.Value) != 32 || !validTime(in.AppendedAt) {
 		return cll.AppendResult{}, cll.ErrInvalid
 	}
 	var count uint64
-	if err := tx.QueryRow(ctx, "SELECT entry_count FROM agw_capsule_logs WHERE log_id=$1 FOR UPDATE", s.logID).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT entry_count FROM agw_capsule_logs WHERE log_id=$1 FOR UPDATE", s.logID).Scan(&count); err != nil {
 		return cll.AppendResult{}, err
 	}
-	entry, err := s.getEntry(ctx, tx, in.Value)
+	var entry cll.Entry
+	var ms int64
+	err := tx.QueryRowContext(ctx, "SELECT seq,identity,appended_ms FROM agw_capsule_entries WHERE log_id=$1 AND identity=$2", s.logID, in.Value).Scan(&entry.Seq, &entry.Value, &ms)
+	entry.AppendedAt = time.UnixMilli(ms).UTC()
 	if err == nil {
 		return cll.AppendResult{Entry: entry, Outcome: cll.AppendIdempotent}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return cll.AppendResult{}, err
 	}
 	if count >= cll.MaxPortableInteger {
 		return cll.AppendResult{}, cll.ErrInvalid
 	}
 	entry = cll.Entry{Seq: count + 1, Value: bytes.Clone(in.Value), AppendedAt: in.AppendedAt.UTC().Truncate(time.Millisecond)}
-	if _, err = tx.Exec(ctx, "INSERT INTO agw_capsule_entries VALUES($1,$2,$3,$4)", s.logID, entry.Seq, entry.Value, entry.AppendedAt.UnixMilli()); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO agw_capsule_entries VALUES($1,$2,$3,$4)", s.logID, entry.Seq, entry.Value, entry.AppendedAt.UnixMilli()); err != nil {
 		return cll.AppendResult{}, err
 	}
-	_, err = tx.Exec(ctx, "UPDATE agw_capsule_logs SET entry_count=$2 WHERE log_id=$1", s.logID, entry.Seq)
+	_, err = tx.ExecContext(ctx, "UPDATE agw_capsule_logs SET entry_count=$2 WHERE log_id=$1", s.logID, entry.Seq)
 	return cll.AppendResult{Entry: entry, Outcome: cll.AppendInserted}, err
 }
 
@@ -270,16 +326,16 @@ func (s *Store) Append(ctx context.Context, in cll.AppendInput) (cll.AppendResul
 	if err := s.check(ctx); err != nil {
 		return cll.AppendResult{}, err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return cll.AppendResult{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	r, err := s.appendTx(ctx, tx, in)
 	if err != nil {
 		return r, err
 	}
-	return r, tx.Commit(ctx)
+	return r, tx.Commit()
 }
 
 type querier interface {

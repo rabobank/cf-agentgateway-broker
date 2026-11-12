@@ -27,8 +27,9 @@ import (
 var _ = Describe("Witness receipts", func() {
 	It("retries a temporary failure and persists a cryptographically verified response", func() {
 		ctx := context.Background()
-		store, err := postgres.Open(ctx, pool, fmt.Sprintf("witness-%d", time.Now().UnixNano()), nil)
+		store, err := postgres.Open(ctx, pool, fmt.Sprintf("witness-%d", time.Now().UnixNano()), []ed25519.PublicKey{pub})
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(store.Close)
 		Expect(store.Init(ctx)).To(Succeed())
 		_, err = store.Append(ctx, cll.AppendInput{Value: make([]byte, 32), AppendedAt: time.Now().UTC()})
 		Expect(err).NotTo(HaveOccurred())
