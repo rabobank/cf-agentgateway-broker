@@ -43,7 +43,7 @@ func database(raw, serviceName string) (string, error) {
 					if uri, ok := s.Credentials[field].(string); ok {
 						u, e := url.Parse(uri)
 						if e != nil || u.Host == "" || !(u.Scheme == "postgres" || u.Scheme == "postgresql") {
-							return "", errors.New(fmt.Sprintf("invalid PostgreSQL URI: %v", e))
+							return "", errors.New("invalid PostgreSQL URI: expected a parseable postgres/postgresql URL with a host")
 						}
 						return uri, nil
 					}
