@@ -56,7 +56,8 @@ the included manifest and deploy with `cf push`. The checked-in `cf/dev-vars.yml
 contains the local lab's non-secret settings; `cf/local-secrets.yml` holds the
 lab's private values and is ignored by Git.
 
-See [deployment instructions](cf/README.md), [lab validation results](cf/verification.md),
+See [deployment instructions](cf/README.md), the [configuration reference](cf/configuration.md),
+[lab validation results](cf/verification.md),
 [architecture](docs/architecture.md), and [source findings](docs/source-investigation.md).
 Shared operator-configured MCP servers and capsule recording are described in
 [MCP and capsules](docs/mcp-capsules.md).

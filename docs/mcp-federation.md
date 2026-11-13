@@ -7,6 +7,9 @@ through the legacy global `/mcp` target list.
 
 ## Operator configuration
 
+The [configuration reference](../cf/configuration.md) lists complete backend/auth
+fields, runtime mappings, validation rules and JSON examples.
+
 `inference_plans` / `INFERENCE_PLANS` defines an array of inference plans, each
 with `id`, `name`, nonblank `description`, `free`, explicit `models`, positive USD
 `budget`, and `window`. Each instance receives the policy of its selected plan.
