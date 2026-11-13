@@ -158,10 +158,22 @@ The launcher checks JSON syntax; the pinned gateway validates the schema.
 | Field | JSON type / meaning |
 | --- | --- |
 | `name` | Required client-facing model match string. Use explicit aliases in broker plans. |
-| `provider` | Required selector. Built-in strings: `openai` (`openAI` alias), `anthropic`, `gemini`, `vertex`, `bedrock`, `azure`, `copilot`. Custom/preset/reference forms follow upstream schema. |
+| `provider` | Required selector. Built-in strings: `openai` (`openAI` alias), `anthropic`, `gemini`, `vertex`, `bedrock`, `azure`, `copilot`. Inline custom objects and preset strings are also supported; provider references are not supported by this launcher (see below). |
 | `params` | Optional object, defaults `{}`; connection/model parameters below. |
 | `id` | Optional stable string identity for this model entry. |
 | `visibility` | Optional `public` (default) or `internal`; controls direct client access. |
+
+Inline custom configuration (`"provider": {"custom": {...}}`) and upstream preset
+strings such as `"mistral"` or `"ollama"` are self-contained model selectors; their
+formats and defaults follow the pinned gateway's
+[custom-provider schema](https://github.com/rkoster/agentgateway/blob/59452e8176daa21db3f1c2b8f240d55a63e4d8f9/crates/llm/src/custom.rs).
+
+Upstream also supports `"provider": {"reference": "provider-name"}`, but it
+requires a matching named entry in `llm.providers`. The CF launcher emits only
+`llm.models` and exposes no `llm.providers` setting, so reference selectors in
+`GATEWAY_MODELS` fail startup with `references unknown provider`. Use a built-in,
+preset or inline custom selector here. Named references require a separately
+authored full gateway configuration instead of this launcher's environment format.
 
 | `params` field | JSON type / meaning |
 | --- | --- |
