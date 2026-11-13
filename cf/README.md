@@ -25,13 +25,17 @@ sha256sum --check SHA256SUMS
 tar -xzf cf-agentgateway-broker-linux-amd64.tar.gz
 ```
 
-The archive contains this `README.md`, `manifest.yml`, `dev-vars.yml`, and the
-tested binaries under `dist/`. Run the following commands from this directory.
+The archive contains this `README.md`, `configuration.md`, `manifest.yml`,
+`dev-vars.yml`, and the tested binaries under `dist/`. Run the following commands
+from this directory.
 For source builds instead, initialize submodules, run `devbox run vendor` and
 `devbox run build` at the repository root, then run the deployment commands
 from `cf/`.
 
 ## 2. Configure
+
+See the [complete configuration reference](configuration.md) for every vars-file
+and environment name, required/default values, nested JSON fields, and examples.
 
 `dev-vars.yml` contains non-secret values for the local lab, including its
 DeepSeek-compatible endpoint. Copy it for your deployment and adjust every value

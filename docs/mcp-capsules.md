@@ -113,6 +113,9 @@ Measure this before selecting production retention/rotation and capacity limits.
 
 ## Operator settings
 
+See the [configuration reference](../cf/configuration.md) for environment mappings,
+required key formats, defaults and sidecar overrides.
+
 - `mcp_session_key`: stable private 32-byte hexadecimal AES-256-GCM key, separate
   from the capsule signing seed and shared across gateway replicas. The launcher
   refuses to enable MCP without a valid `SESSION_KEY`. This authenticates resumed

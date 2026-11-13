@@ -74,10 +74,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/release-bundles"
           tar -czf "$RUNNER_TEMP/release-bundles/cf-agentgateway-broker-linux-amd64.tar.gz" \
             --transform='s|^cf/README.md$|README.md|' \
+            --transform='s|^cf/configuration.md$|configuration.md|' \
             --transform='s|^cf/manifest.yml$|manifest.yml|' \
             --transform='s|^cf/dev-vars.yml$|dev-vars.yml|' \
             --transform='s|^cf/dist/|dist/|' \
-            cf/README.md cf/manifest.yml cf/dev-vars.yml \
+            cf/README.md cf/configuration.md cf/manifest.yml cf/dev-vars.yml \
             cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin
           cd "$RUNNER_TEMP/release-bundles"
           sha256sum ./*.tar.gz > SHA256SUMS
