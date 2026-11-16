@@ -1,5 +1,5 @@
 # Non-secret settings for the local CF lab. Copy to local-vars.yml and supply
-# management_token, broker_password, trusted_ca, and any provider credentials.
+# broker_password, trusted_ca, and any provider credentials.
 gateway_app_name: agentgateway
 broker_app_name: agentgateway-broker
 stack: cflinuxfs5
@@ -14,7 +14,8 @@ gateway_route: agentgateway.10.246.0.21.sslip.io
 broker_route: agentgateway-broker.10.246.0.21.sslip.io
 database_service_name: agentgateway-state
 installation: cf-agentgateway
-management_url: http://agentgateway-management.apps.internal:9090
+management_url: https://agentgateway-management.apps.identity
+management_trusted_ca: '' # CF_SYSTEM_CERT_PATH supplies the lab identity-domain CA
 gateway_url: https://agentgateway.10.246.0.21.sslip.io/v1
 inference_plans: >-
   [{"id":"eba8b5b0-e8a7-49cb-8188-cfa52ed43bdd","name":"shared","description":"Shared model allowance","free":true,"models":["deepseek-v4-flash"],"budget":10,"window":"24h"}]

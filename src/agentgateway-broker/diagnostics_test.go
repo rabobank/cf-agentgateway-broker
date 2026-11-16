@@ -22,7 +22,6 @@ func (f diagnosticTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 func TestManagementFailureIsObservableWithoutSecrets(t *testing.T) {
 	b, _ := fixture(t)
 	b.cfg.ManagementURL = "https://management.example/secret-path"
-	b.cfg.ManagementToken = "secret-token"
 	b.client.Transport = diagnosticTransport(func(*http.Request) (*http.Response, error) {
 		return nil, &url.Error{Op: "Get", URL: "https://user:secret-password@management.example/?token=secret-query", Err: syscall.ECONNREFUSED}
 	})

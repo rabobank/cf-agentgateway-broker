@@ -5,11 +5,12 @@ as separate Cloud Foundry apps. PostgreSQL stores gateway configuration and usag
 
 ## Prerequisites
 
-- CF CLI v8 access to a space where you can deploy apps, bind services, and
-  create app-to-app network policies; broker registration requires the relevant
+- A CF CLI with `map-route --app-port` and `add-route-policy`, plus Python 3,
+  access to deploy apps and bind services; broker registration requires the relevant
   operator permissions.
 - A foundation with `cflinuxfs5`, the binary buildpack, container networking,
-  an internal domain such as `apps.internal`, and routes for both apps.
+  an mTLS domain such as `apps.identity` with route-policy enforcement enabled,
+  and routes for both apps. The identity domain must default-deny without policies.
 - A PostgreSQL service binding with a `postgres://` or `postgresql://` URI in
   `uri` or `url`. Its database role must be able to create and update schemas.
 - Provider connectivity and model pricing. For source builds, also install Docker
@@ -25,7 +26,7 @@ sha256sum --check SHA256SUMS
 tar -xzf cf-agentgateway-broker-linux-amd64.tar.gz
 ```
 
-The archive contains this `README.md`, `configuration.md`, `manifest.yml`,
+The archive contains this `README.md`, `configuration.md`, `manifest.yml`, `deploy`,
 `dev-vars.yml`, and the tested binaries under `dist/`. Run the following commands
 from this directory.
 For source builds instead, initialize submodules, run `devbox run vendor` and
@@ -48,8 +49,7 @@ cp dev-vars.yml local-vars.yml
 Add the following secret values to `local-vars.yml`; keep that file private:
 
 ```yaml
-management_token: 'REPLACE_WITH_A_RANDOM_MANAGEMENT_TOKEN'
-broker_password: 'REPLACE_WITH_A_DIFFERENT_RANDOM_BROKER_PASSWORD'
+broker_password: 'REPLACE_WITH_A_RANDOM_BROKER_PASSWORD'
 capsule_signing_seed: 'REPLACE_WITH_A_STABLE_32_BYTE_HEX_ED25519_SEED'
 mcp_session_key: 'REPLACE_WITH_A_DIFFERENT_STABLE_32_BYTE_HEX_KEY'
 trusted_ca: '' # Empty for system trust, or replace with the PEM issuer CA
@@ -74,8 +74,9 @@ the existing credentials and can be used as a second vars file:
 | `gateway_route`, `broker_route` | Public app routes, without a scheme |
 | `database_service_name` | Name of the existing PostgreSQL service instance to bind |
 | `installation` | Unique broker installation identifier for shared gateway state |
-| `management_url` | Private gateway management URL, including port 9090 |
-| `management_token`, `broker_password` | Distinct strong credentials for management and OSB |
+| `management_url` | HTTPS identity route URL, normally on port 443; destination port is 9090 |
+| `management_trusted_ca` | Optional management CA PEM; empty uses system and CF platform trust |
+| `broker_password` | Strong credential for OSB |
 | `gateway_url` | Public inference URL including `https://` and `/v1` |
 | `trusted_ca` | PEM CA for the public inference route, or an empty string |
 | `gateway_models`, `model_catalog` | JSON strings for provider models and their pricing |
@@ -109,35 +110,51 @@ cf marketplace
 cf create-service POSTGRES_OFFERING POSTGRES_PLAN YOUR_DATABASE_SERVICE_NAME
 ```
 
-Set `database_service_name` in `local-vars.yml` to that instance's name. Push
-without starting, then map a private route and grant the broker network access:
+Set `database_service_name` in `local-vars.yml` to that instance's name. Run the
+deployment helper from the bundle directory (or `cf/` in a source checkout):
 
 ```sh
-cf push -f manifest.yml --vars-file local-vars.yml --no-start --redact-env
-cf map-route YOUR_GATEWAY_APP apps.internal --hostname YOUR_MANAGEMENT_HOSTNAME
-cf add-network-policy YOUR_BROKER_APP YOUR_GATEWAY_APP --protocol tcp --port 9090
-cf start YOUR_GATEWAY_APP
-cf start YOUR_BROKER_APP
+python3 deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml
 ```
 
-Replace the names, internal domain, and hostname in those commands with your
-configured values. `management_url` must point to the mapped internal route.
+Replace the names, identity domain, and hostname with your configured values.
+`management_url` must be `https://YOUR_MANAGEMENT_HOSTNAME.apps.identity`.
+The helper maps port 9090 before replacing gateway containers, grants only the
+broker app identity access, removes obsolete token environment variables, and
+rolls both apps. It refuses unexpected grants on an existing management route.
+Uploads use `--no-start`, so this helper stops existing apps during deployment.
+If the broker app is deleted and recreated, remove the old app-GUID policy and
+rerun the helper to grant the new app identity.
 Ensure gateway-to-PostgreSQL and gateway-to-provider networking is allowed;
 service binding does not necessarily create the required network policy.
 
 For the local lab using its existing secrets file:
 
 ```sh
-cf push -f manifest.yml --vars-file dev-vars.yml --vars-file local-secrets.yml --no-start --redact-env
-cf map-route agentgateway apps.internal --hostname agentgateway-management
-cf add-network-policy agentgateway-broker agentgateway --protocol tcp --port 9090
-cf start agentgateway
-cf start agentgateway-broker
+python3 deploy agentgateway agentgateway-broker apps.identity agentgateway-management --vars-file dev-vars.yml --vars-file local-secrets.yml
 ```
 
 Gorouter terminates public TLS and forwards inference to `$PORT`. Management
-uses the private route on port 9090, protected by its own token. Raw admin/debug
-remains loopback-only.
+uses the identity route, with mTLS and a broker-only route policy, forwarding to
+port 9090. The broker loads CF instance identity on each TLS handshake. The
+launcher trusts certificates in `CF_SYSTEM_CERT_PATH` and optional
+`MANAGEMENT_TRUSTED_CA`. Raw admin/debug remains loopback-only. `RUST_MIN_STACK`
+is fixed by the manifest at `16777216`; it is not an operator variable.
+
+### Migrating an existing token-based deployment
+
+Before deploying the tokenless gateway, remove its old management internal route
+and broker-to-gateway network policy. This temporarily makes OSB operations
+unavailable until deployment completes. Audit other routes and network policies
+to ensure only the identity route can reach management port 9090.
+
+```sh
+cf unmap-route YOUR_GATEWAY_APP apps.internal --hostname YOUR_OLD_MANAGEMENT_HOSTNAME
+cf remove-network-policy YOUR_BROKER_APP YOUR_GATEWAY_APP --protocol tcp --port 9090
+```
+
+Remove `management_token` from private vars/secrets files and set the new
+`management_url` and `management_trusted_ca`, then run the helper above.
 
 ## 4. Register and use the broker
 
@@ -169,8 +186,12 @@ delivery happens in the background. MCP calls do not charge the inference budget
 - Check both apps with `cf apps` and inspect their logs if they fail to start.
 - Create and bind a service instance, then call `/v1/models` and
   `/v1/chat/completions` using the binding credentials.
-- Check that the broker can reach private gateway management and that the
-  gateway can reach PostgreSQL and the provider.
+- Check the broker's `/ready` endpoint returns 200 through identity-domain
+  management, and that the gateway can reach PostgreSQL and the provider.
+- Confirm `cf route-policies` allows only the broker app on the management route,
+  and that neither app has `MANAGEMENT_TOKEN`. Unauthenticated callers and other
+  app identities must be denied management access; public inference routes must
+  not expose `/api/runtime` or `/api/config/resources/llm.apiKey`.
 - Restart or scale gateway instances and confirm existing credentials still work.
 
 Budgets charge after responses and synchronize across replicas periodically.
