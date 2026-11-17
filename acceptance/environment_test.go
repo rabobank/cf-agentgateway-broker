@@ -175,7 +175,11 @@ func (e *environment) startContainer(role string, env map[string]string) {
 		args = append(args, "--env", key+"="+value)
 	}
 	if role == "gateway" {
-		args = append(args, stackImage, "sh", "-c", "./bin/capsule-extmcp & exec ./bin/launcher")
+		command := "./bin/capsule-extmcp & exec ./bin/launcher"
+		if e.sharedMCP != nil {
+			command = "test -r /fixture-ca.pem || exit 1; " + command
+		}
+		args = append(args, stackImage, "sh", "-c", command)
 	} else {
 		args = append(args, stackImage, "./bin/launcher")
 	}

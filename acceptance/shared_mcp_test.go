@@ -104,7 +104,9 @@ func startSharedMCPFixture(work string) *sharedMCPFixture {
 	}))
 	DeferCleanup(server.Close)
 	f.url = server.URL
-	Expect(os.WriteFile(filepath.Join(work, "fixture-ca.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600)).To(Succeed())
+	// This public CA must be readable by the runtime image's unprivileged user,
+	// whose UID differs from the host runner. It contains no private key.
+	Expect(os.WriteFile(filepath.Join(work, "fixture-ca.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0644)).To(Succeed())
 	return f
 }
 
