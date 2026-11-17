@@ -223,9 +223,9 @@ var _ = Describe("consolidated shared MCP lifecycle", func() {
 			Expect(body).NotTo(ContainSubstring(`"isError":true`))
 		}
 		Eventually(func() string {
-			return e.queryShared(`SELECT count(DISTINCT record->'gateway'->'selected_identity'->>'client_id') FROM agw_capsules WHERE instance_id='shared-instance' AND record->'gateway'->>'phase'='planned'`)
+			return e.queryShared(`SELECT count(DISTINCT record->'Identity'->'selected_identity'->>'client_id') FROM agw_capsules WHERE instance_id='shared-instance' AND record->>'Phase'='planned'`)
 		}).WithContext(ctx).WithTimeout(15 * time.Second).Should(Equal("2"))
-		Expect(e.queryShared(`SELECT count(*) FROM agw_capsules WHERE instance_id='shared-instance' AND ((record->'gateway'->>'target' LIKE '%-one' AND record->'gateway'->'selected_identity'->>'client_id'='principal-one') OR (record->'gateway'->>'target' LIKE '%-two' AND record->'gateway'->'selected_identity'->>'client_id'='principal-two'))`)).To(Equal("4"))
+		Expect(e.queryShared(`SELECT count(*) FROM agw_capsules WHERE instance_id='shared-instance' AND ((record->'Identity'->>'target' LIKE '%-one' AND record->'Identity'->'selected_identity'->>'client_id'='principal-one') OR (record->'Identity'->>'target' LIKE '%-two' AND record->'Identity'->'selected_identity'->>'client_id'='principal-two'))`)).To(Equal("4"))
 		Expect(e.queryShared(`SELECT count(*) FROM agw_config_resources WHERE kind IN ('mcp.instance','mcp.grant') AND deleted_at IS NULL`)).To(Equal("2"))
 		By("recovering the same instance and binding after restarting broker and gateway processes")
 		e.restartShared(ctx, "broker")
