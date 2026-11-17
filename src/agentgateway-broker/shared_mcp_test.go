@@ -32,6 +32,33 @@ func TestSharedMCPRejectsCollidingTargetsAcrossBackends(t *testing.T) {
 	}
 }
 
+func TestSharedMCPAttributesLiteralAndInstanceSelectedClientIDs(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		client any
+		parameters map[string]string
+		want string
+	}{
+		{"literal", "operator-client", nil, "operator-client"},
+		{"instance selected", map[string]string{"fromInstanceParameter":"client_id"}, map[string]string{"client_id":"developer-client"}, "developer-client"},
+	} {
+		t.Run(test.name,func(t *testing.T){
+			b,_:=fixture(t)
+			server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+				write(w,200,map[string]any{"resources":[]any{map[string]any{"value":map[string]any{
+					"name":"tools","revision":"v1","callerAuth":map[string]any{"issuer":"https://uaa.test","audiences":[]string{"exchange"},"jwks":map[string]string{"url":"https://uaa.test/keys"}},
+					"targets":[]any{map[string]any{"name":"work","policies":map[string]any{"backendAuth":map[string]any{"oauthTokenExchange":map[string]any{"host":"https://tokens.test","clientAuth":map[string]any{"clientId":test.client}}}}}},
+				}}}})
+			}));defer server.Close();b.cfg.ManagementURL=server.URL
+			var plan OfferingPlan;plan.Access.Backends=[]string{"tools"}
+			_,selections,err:=b.resolveShared(context.Background(),&plan,test.parameters)
+			if err!=nil {t.Fatal(err)}
+			identity:=selections[0].Identities["work"]
+			if identity.ClientID!=test.want||identity.Authority!="https://tokens.test" {t.Fatalf("known upstream identity lost: %+v",identity)}
+		})
+	}
+}
+
 func TestSharedMCPInstanceIdentityRecoveryAndOrphanCleanup(t *testing.T) {
 	b, _ := fixture(t)
 	raw := `{"service_id":"","inference_plans":[],"services":[{"id":"tools","name":"tools","description":"Tools","protocol":"mcp","connection":{"url":"https://offering.test/mcp"},"plans":[{"id":"work","name":"standard","description":"Work","access":{"backends":["devops"]},"schemas":{"service_instance":{"create":{"parameters":{"type":"object","additionalProperties":false,"required":["client_id"],"properties":{"client_id":{"type":"string","pattern":"^[a-z-]+$"}}}}}}}]}]}`
