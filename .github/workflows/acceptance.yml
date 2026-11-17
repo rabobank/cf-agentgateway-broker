@@ -50,7 +50,9 @@ jobs:
       - name: Run unit and PostgreSQL contract tests
         env:
           TEST_REPORT_DIR: ${{ runner.temp }}/acceptance-reports/capsules
-        run: devbox run test
+        run: |
+          python3 -m pip install -r cf/requirements.txt
+          devbox run test
 
       - name: Verify generated Counterfeiter fakes
         run: |
@@ -78,8 +80,14 @@ jobs:
             --transform='s|^cf/manifest.yml$|manifest.yml|' \
             --transform='s|^cf/dev-vars.yml$|dev-vars.yml|' \
             --transform='s|^cf/deploy$|deploy|' \
+            --transform='s|^cf/config-vars$|config-vars|' \
+            --transform='s|^cf/requirements.txt$|requirements.txt|' \
+            --transform='s|^cf/broker.example.yml$|broker.example.yml|' \
+            --transform='s|^cf/gateway.example.yml$|gateway.example.yml|' \
+            --transform='s|^cf/deployment.example.yml$|deployment.example.yml|' \
             --transform='s|^cf/dist/|dist/|' \
             cf/README.md cf/configuration.md cf/manifest.yml cf/dev-vars.yml cf/deploy \
+            cf/config-vars cf/requirements.txt cf/broker.example.yml cf/gateway.example.yml cf/deployment.example.yml \
             cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin
           cd "$RUNNER_TEMP/release-bundles"
           sha256sum ./*.tar.gz > SHA256SUMS

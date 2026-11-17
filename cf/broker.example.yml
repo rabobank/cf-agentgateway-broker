@@ -1,0 +1,84 @@
+installation: production
+auth:
+  username: broker
+  password: REPLACE_WITH_BROKER_PASSWORD
+gateway:
+  management_url: https://agentgateway-management.apps.identity
+
+services:
+  - id: team-inference
+    name: team-inference
+    description: Team inference
+    protocol: llm
+    connection:
+      url: https://agentgateway.apps.example.com/v1
+    plans:
+      - id: team-small
+        name: small
+        description: Small model with USD 10 daily allowance
+        free: true
+        access:
+          models: [chat-small]
+        budget: {usd: 10, window: 24h}
+      - id: team-large
+        name: large
+        description: Both models with USD 50 daily allowance
+        free: false
+        access:
+          models: [chat-small, gpt-6-sol]
+        budget: {usd: 50, window: 24h}
+
+  - id: production-inference
+    name: production-inference
+    description: Production inference
+    protocol: llm
+    connection:
+      url: https://agentgateway.apps.example.com/v1
+    plans:
+      - id: production-small
+        name: small
+        description: Production allowance
+        free: false
+        access:
+          models: [gpt-6-sol]
+        budget: {usd: 100, window: 24h}
+
+  - id: development-tools
+    name: development-tools
+    description: Development tools
+    protocol: mcp
+    connection:
+      url: https://agentgateway.apps.example.com/mcp
+    plans:
+      - id: development-standard
+        name: standard
+        description: Federated development tools
+        free: true
+        access:
+          backends: [development]
+        schemas:
+          service_instance:
+            create:
+              parameters:
+                type: object
+                additionalProperties: false
+                required: [client_id]
+                properties:
+                  client_id:
+                    type: string
+                    description: Upstream application client ID
+                    pattern: '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+
+  - id: knowledge-tools
+    name: knowledge-tools
+    description: Knowledge search
+    protocol: mcp
+    connection:
+      url: https://agentgateway.apps.example.com/mcp
+    plans:
+      - id: knowledge-standard
+        name: standard
+        description: Documentation tools
+        free: true
+        access:
+          backends: [knowledge]

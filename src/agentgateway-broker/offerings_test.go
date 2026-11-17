@@ -57,9 +57,13 @@ func TestIndependentOfferingsAndOwnership(t *testing.T) {
 
 func TestOfferingRejectsNonfiniteBudgetAndDuplicateAccess(t *testing.T) {
 	for _, budget := range []string{`1e999`, `10`} {
-		b,_:=fixture(t)
-		raw:=`{"service_id":"","inference_plans":[],"services":[{"id":"team","name":"team","description":"Team","protocol":"llm","connection":{"url":"https://gateway.test/v1"},"plans":[{"id":"small","name":"small","description":"Small","access":{"models":["small","small"]},"budget":{"usd":`+budget+`,"window":"24h"}}]}]}`
-		if err:=json.Unmarshal([]byte(raw),&b.cfg);err!=nil {t.Fatal(err)}
-		if err:=b.cfg.validate();err==nil {t.Fatal("invalid or duplicate access accepted")}
+		b, _ := fixture(t)
+		raw := `{"service_id":"","inference_plans":[],"services":[{"id":"team","name":"team","description":"Team","protocol":"llm","connection":{"url":"https://gateway.test/v1"},"plans":[{"id":"small","name":"small","description":"Small","access":{"models":["small","small"]},"budget":{"usd":` + budget + `,"window":"24h"}}]}]}`
+		if err := json.Unmarshal([]byte(raw), &b.cfg); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.cfg.validate(); err == nil {
+			t.Fatal("invalid or duplicate access accepted")
+		}
 	}
 }

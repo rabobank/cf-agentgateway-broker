@@ -3,6 +3,7 @@ package main
 import (
 	"cf-agentgateway-capsule/plugin"
 	"cf-agentgateway-capsule/postgres"
+	mcpconfig "cf-mcp-config"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -61,6 +62,25 @@ func databaseURL() (string, error) {
 }
 
 func run(ctx context.Context) error {
+	backendRevisions := map[string]string{}
+	if raw := os.Getenv("AGENTGATEWAY_CONFIG"); raw != "" {
+		var cfg mcpconfig.GatewayOperator
+		if err := mcpconfig.DecodeOperator([]byte(raw), &cfg); err != nil {
+			return err
+		}
+		for _, backend := range cfg.MCP.Backends {
+			backendRevisions[backend.Name] = backend.Revision
+		}
+		values := map[string]string{"DATABASE_SERVICE_NAME": cfg.Database.ServiceName, "CAPSULE_LOG_ID": cfg.Capsules.LogID, "CAPSULE_SIGNING_SEED": cfg.Capsules.SigningSeed, "CAPSULE_WITNESS_URL": cfg.Capsules.Witness.URL, "CAPSULE_WITNESS_PUBLIC_KEY": cfg.Capsules.Witness.PublicKey}
+		for k, v := range values {
+			if os.Getenv(k) != "" {
+				return fmt.Errorf("remove legacy %s when using AGENTGATEWAY_CONFIG", k)
+			}
+			if err := os.Setenv(k, v); err != nil {
+				return err
+			}
+		}
+	}
 	uri, err := databaseURL()
 	if err != nil {
 		return err
@@ -95,6 +115,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer store.Close()
+	store.SetBackendRevisions(backendRevisions)
 	if err = store.Init(ctx); err != nil {
 		return err
 	}

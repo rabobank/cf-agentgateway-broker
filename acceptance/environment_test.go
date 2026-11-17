@@ -31,17 +31,22 @@ const (
 )
 
 type environment struct {
-	root          string
-	work          string
-	postgresPort  int
-	providerPort  int
-	brokerPort    int
-	gatewayPort   int
-	providerCalls atomic.Int64
-	mcpURL        string
+	root           string
+	work           string
+	postgresPort   int
+	providerPort   int
+	brokerPort     int
+	gatewayPort    int
+	providerCalls  atomic.Int64
+	mcpURL         string
+	operatorConfig bool
 }
 
 func startEnvironment() *environment {
+	return startConfiguredEnvironment(false)
+}
+
+func startConfiguredEnvironment(operator bool) *environment {
 	GinkgoHelper()
 	root, err := filepath.Abs("..")
 	Expect(err).NotTo(HaveOccurred())
@@ -53,7 +58,7 @@ func startEnvironment() *environment {
 	work, err := os.MkdirTemp("", "agentgateway-acceptance-")
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(os.RemoveAll, work)
-	e := &environment{root: root, work: work}
+	e := &environment{root: root, work: work, operatorConfig: operator}
 	e.startPostgres()
 	e.startProvider()
 	e.startMCP()
@@ -185,6 +190,11 @@ func (e *environment) startGateway() {
 	uri := fmt.Sprintf("postgres://postgres@127.0.0.1:%d/gateway_acceptance?sslmode=disable", e.postgresPort)
 	models := []any{map[string]any{"name": model, "provider": "openAI", "params": map[string]any{"model": model, "apiKey": providerKey, "baseUrl": fmt.Sprintf("http://127.0.0.1:%d/v1", e.providerPort)}}}
 	catalog := map[string]any{"providers": map[string]any{"openai": map[string]any{"models": map[string]any{model: map[string]any{"rates": map[string]string{"input": "1000000", "output": "1000000"}}}}}}
+	if e.operatorConfig {
+		e.startContainer("gateway", map[string]string{"APP_ROLE": "gateway", "PORT": strconv.Itoa(e.gatewayPort), "RUST_MIN_STACK": "16777216", "VCAP_SERVICES": jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}), "AGENTGATEWAY_CONFIG": jsonString(map[string]any{"database": map[string]string{"service_name": "acceptance-state"}, "llm": map[string]any{"models": models}, "model_catalog": catalog, "capsules": map[string]string{"log_id": "acceptance", "signing_seed": strings.Repeat("12", 32)}})})
+		Eventually(func() int { return status(http.MethodGet, "http://127.0.0.1:9090/api/runtime", "", "", false) }).WithTimeout(90 * time.Second).Should(Equal(http.StatusOK))
+		return
+	}
 	e.startContainer("gateway", map[string]string{
 		"APP_ROLE": "gateway", "PORT": strconv.Itoa(e.gatewayPort),
 		"RUST_MIN_STACK": "16777216", "GATEWAY_MODELS": jsonString(models), "MODEL_CATALOG": jsonString(catalog),
@@ -204,6 +214,11 @@ func (e *environment) startGateway() {
 func (e *environment) startBroker() {
 	GinkgoHelper()
 	e.brokerPort = freePort()
+	if e.operatorConfig {
+		e.startContainer("broker", map[string]string{"APP_ROLE": "broker", "PORT": strconv.Itoa(e.brokerPort), "AGENTGATEWAY_CONFIG": jsonString(map[string]any{"installation": "acceptance", "auth": map[string]string{"username": "broker", "password": brokerPassword}, "gateway": map[string]string{"management_url": "http://127.0.0.1:9090"}, "services": []any{map[string]any{"id": serviceID, "name": "inference", "description": "Inference", "protocol": "llm", "connection": map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/v1", e.gatewayPort)}, "plans": []any{map[string]any{"id": planID, "name": "small", "description": "Allowance", "access": map[string]any{"models": []string{model}}, "budget": map[string]any{"usd": 20, "window": "24h"}}}}}})})
+		Eventually(func() int { return status(http.MethodGet, e.brokerURL()+"/ready", "", "", false) }).WithTimeout(30 * time.Second).Should(Equal(http.StatusOK))
+		return
+	}
 	e.startContainer("broker", map[string]string{
 		"APP_ROLE": "broker", "PORT": strconv.Itoa(e.brokerPort), "BROKER_PASSWORD": brokerPassword,
 		"INSTALLATION": "acceptance", "MANAGEMENT_URL": "http://127.0.0.1:9090",

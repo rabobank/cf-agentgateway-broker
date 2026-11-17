@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+python3 -m unittest cf/config_vars_test.py
+python3 cf/config-vars --check cf/broker.example.yml cf/gateway.example.yml
 pushd src/mcpconfig >/dev/null
 go test -race ./...
 go vet ./...

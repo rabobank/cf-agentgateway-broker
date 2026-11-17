@@ -1,5 +1,23 @@
 # MCP service plans and federated backend authentication
 
+## Consolidated configuration
+
+The new CF manifest uses `broker.yml` and `gateway.yml`, converted to per-app
+`AGENTGATEWAY_CONFIG` JSON strings. See the [examples](../cf/broker.example.yml)
+and [reference](../cf/configuration.md). MCP offerings/plans grant access to named
+gateway backend definitions; several targets can use independent native upstream
+authentication policies. Caller trust is configured separately.
+
+Select federation client IDs at instance creation using advertised OSB string
+parameter schemas. The `fromInstanceParameter` marker is supported only at the
+native federation `clientAuth.clientId` location. No binding-time overrides.
+Instances/grants retain selected parameters and shared backend revision references,
+not shared upstream secrets. Gateway materialization supplies effective native
+policy with generation-specific target names; capsule attribution identifies the
+target selected for the operation. Missing or incompatible revisions deny access.
+
+The following sections describe the retained legacy configuration/snapshot path.
+
 Operators can publish one plan per configured HTTP MCP backend through the existing
 `agentgateway` service. Inference plans are also operator-defined. A backend
 with `plan_id` is exposed only through broker-created app-binding routes, never

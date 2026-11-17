@@ -28,7 +28,11 @@ def main():
     run("push", "-f", "manifest.yml", *sys.argv[5:], "--no-start", "--redact-env")
     broker_guid = cf("app", broker, "--guid").strip()
     env = json.loads(cf("curl", "/v3/apps/" + broker_guid + "/environment_variables"))["var"]
-    url = urlsplit(env.get("MANAGEMENT_URL", ""))
+    try:
+        settings = json.loads(env["AGENTGATEWAY_CONFIG"])
+        url = urlsplit(settings["gateway"]["management_url"])
+    except (KeyError, ValueError, TypeError):
+        raise SystemExit("Broker AGENTGATEWAY_CONFIG must contain gateway.management_url")
     if url.scheme != "https" or url.hostname != host + "." + domain or url.port not in (None, 443) or url.path not in ("", "/") or url.username or url.query or url.fragment:
         raise SystemExit("MANAGEMENT_URL must match the HTTPS identity route on port 443")
     run("map-route", gateway, domain, "--hostname", host, "--app-port", "9090")
@@ -46,8 +50,20 @@ def main():
         raise SystemExit("Management route has unexpected callers; reconcile its route policies first")
     if not policies:
         run("add-route-policy", domain, "--hostname", host, "--source-app", broker)
+    # cf push merges app environment; explicitly remove retired settings before
+    # the new binaries reject ambiguous legacy/new configuration on startup.
+    retired = ("MANAGEMENT_TOKEN", "DATABASE_SERVICE_NAME", "GATEWAY_MODELS",
+               "MODEL_CATALOG", "MCP_SERVERS", "SESSION_KEY", "CAPSULE_LOG_ID",
+               "CAPSULE_SIGNING_SEED", "CAPSULE_WITNESS_URL", "CAPSULE_WITNESS_PUBLIC_KEY",
+               "BROKER_PASSWORD", "INSTALLATION", "MANAGEMENT_URL", "MANAGEMENT_TRUSTED_CA",
+               "GATEWAY_URL", "GATEWAY_TRUSTED_CA", "INFERENCE_PLANS", "MCP_URL",
+               "MODEL_ALIASES", "USD_ALLOWANCE", "BUDGET_WINDOW")
     for app in (gateway, broker):
-        run("unset-env", app, "MANAGEMENT_TOKEN")
+        guid = cf("app", app, "--guid").strip()
+        present = json.loads(cf("curl", "/v3/apps/" + guid + "/environment_variables"))["var"]
+        for key in retired:
+            if key in present:
+                run("unset-env", app, key)
     run("restart", gateway, "--strategy", "rolling")
     run("restart", broker, "--strategy", "rolling")
 

@@ -29,10 +29,11 @@ type managedResource struct {
 	Value json.RawMessage `json:"value"`
 }
 type managedValue struct {
-	Name     string          `json:"name"`
-	Instance string          `json:"instance,omitempty"`
-	Metadata json.RawMessage `json:"metadata"`
-	Route    map[string]any  `json:"route,omitempty"`
+	BackendSelections []mcpconfig.BackendSelection `json:"backendSelections,omitempty"`
+	Name              string                       `json:"name"`
+	Instance          string                       `json:"instance,omitempty"`
+	Metadata          json.RawMessage              `json:"metadata"`
+	Route             map[string]any               `json:"route,omitempty"`
 }
 
 func (b *Broker) backend(plan string) *mcpconfig.Backend {
@@ -102,10 +103,15 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		req.PlanID = r.URL.Query().Get("plan_id")
 	}
 	backend := b.backend(req.PlanID)
+	offering, plan := b.cfg.offering(req.ServiceID, req.PlanID)
+	shared := offering != nil && offering.Protocol == "mcp"
+	if shared {
+		backend = &mcpconfig.Backend{}
+	}
 	if backend == nil {
 		return false
 	}
-	if req.ServiceID != b.cfg.ServiceID {
+	if !shared && req.ServiceID != b.cfg.ServiceID {
 		fail(w, 400, "unknown service")
 		return true
 	}
@@ -171,6 +177,17 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			return true
 		}
 		params, err := backend.Resolve(req.Parameters)
+		var selections []mcpconfig.BackendSelection
+		if shared {
+			params, err = validateParameters(plan.Schemas, req.Parameters)
+			if err == nil {
+				backend, selections, err = b.resolveShared(ctx, plan, params)
+				if err != nil {
+					fail(w, 503, "shared backend configuration unavailable or incompatible")
+					return true
+				}
+			}
+		}
 		if err != nil {
 			fail(w, 400, err.Error())
 			return true
@@ -189,7 +206,7 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			fail(w, 500, "cannot allocate instance generation")
 			return true
 		}
-		instance = &mcpconfig.Instance{ID: id, Installation: b.cfg.Installation, ServiceID: req.ServiceID, PlanID: req.PlanID, Org: req.OrganizationGUID, Space: req.SpaceGUID, Fingerprint: fp, Parameters: params, Backend: *backend, Generation: gen}
+		instance = &mcpconfig.Instance{ID: id, Installation: b.cfg.Installation, ServiceID: req.ServiceID, PlanID: req.PlanID, Org: req.OrganizationGUID, Space: req.SpaceGUID, Fingerprint: fp, Parameters: params, Backend: *backend, Generation: gen, Selections: selections}
 		data, _ := json.Marshal(instance)
 		if err = b.saveManaged(ctx, "mcp.instance", managedValue{Name: instanceID, Metadata: data}); err != nil {
 			fail(w, 503, "cannot publish instance configuration")
@@ -254,12 +271,25 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			return true
 		}
 		data, _ := json.Marshal(binding)
-		if err = b.saveManaged(ctx, "mcp.grant", managedValue{Name: grantID, Instance: instanceID, Metadata: data, Route: binding.Route()}); err != nil {
+		route := binding.Route()
+		selections := append([]mcpconfig.BackendSelection(nil), instance.Selections...)
+		if len(selections) > 0 {
+			route["backends"] = []any{}
+			for i := range selections {
+				selections[i].TargetPrefix = binding.TargetName() + "-" + selections[i].Name
+			}
+		}
+		if err = b.saveManaged(ctx, "mcp.grant", managedValue{Name: grantID, Instance: instanceID, Metadata: data, Route: route, BackendSelections: selections}); err != nil {
 			fail(w, 503, "cannot publish binding configuration")
 			return true
 		}
 	}
 	base := strings.TrimSuffix(strings.TrimRight(b.cfg.MCPURL, "/"), "/mcp")
-	write(w, 201, map[string]any{"credentials": map[string]any{"mcp_url": base + binding.Path(), "audience": instance.Backend.Auth.Audience, "issuer": binding.Account.Issuer, "subject": binding.Account.Subject, "auth_method": instance.Backend.Auth.Method, "trusted_ca": b.trustedCA}})
+	trusted := b.trustedCA
+	if shared {
+		base = strings.TrimSuffix(strings.TrimRight(offering.Connection.URL, "/"), "/mcp")
+		trusted = offering.Connection.TrustedCA
+	}
+	write(w, 201, map[string]any{"credentials": map[string]any{"mcp_url": base + binding.Path(), "audience": instance.Backend.Auth.Audience, "issuer": binding.Account.Issuer, "subject": binding.Account.Subject, "auth_method": instance.Backend.Auth.Method, "trusted_ca": trusted}})
 	return true
 }

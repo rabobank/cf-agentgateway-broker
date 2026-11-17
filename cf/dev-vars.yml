@@ -1,5 +1,6 @@
-# Non-secret settings for the local CF lab. Copy to local-vars.yml and supply
-# broker_password, trusted_ca, and any provider credentials.
+# Non-secret deployment settings for the local CF lab. Application settings below
+# are legacy examples; the manifest now takes broker_config and gateway_config
+# from converted broker.yml/gateway.yml. See the adjacent *.example.yml files.
 gateway_app_name: agentgateway
 broker_app_name: agentgateway-broker
 stack: cflinuxfs5

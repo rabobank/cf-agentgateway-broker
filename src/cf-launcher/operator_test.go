@@ -36,12 +36,31 @@ func TestOperatorGatewayAssemblyKeepsProvidersAndHidesWiring(t *testing.T) {
 }
 
 func TestOperatorGatewayValidatesUnusedMCPTemplates(t *testing.T) {
-	t.Setenv("VCAP_SERVICES",`{"postgres":[{"name":"state","credentials":{"uri":"postgres://db/gateway"}}]}`)
-	for _,target:= range []string{
+	t.Setenv("VCAP_SERVICES", `{"postgres":[{"name":"state","credentials":{"uri":"postgres://db/gateway"}}]}`)
+	for _, target := range []string{
 		`{"name":"work","mcp":{"host":"https://tools.test"},"policies":{"backendAuth":{"oauthTokenExchange":{"clientAuth":{"clientId":{"fromInstanceParameter":""}}}}}}`,
 		`{"name":"work","mcp":{"host":"https://tools.test"},"policies":{"requestHeaderModifier":{"set":{"X-Key":{"fromInstanceParameter":"secret"}}}}}`,
 	} {
-		raw:=`{"database":{"service_name":"state"},"mcp":{"session_key":"`+strings.Repeat("12",32)+`","caller_auth":{"issuer":"https://uaa.test","audiences":["exchange"],"jwks":{"url":"https://uaa.test/keys"}},"backends":[{"name":"tools","revision":"v1","mcp":{"targets":[`+target+`]}}]}}`
-		if _,err:=operatorGateway([]byte(raw),8080);err==nil {t.Fatal("unsupported identity substitution accepted")}
+		raw := `{"database":{"service_name":"state"},"mcp":{"session_key":"` + strings.Repeat("12", 32) + `","caller_auth":{"issuer":"https://uaa.test","audiences":["exchange"],"jwks":{"url":"https://uaa.test/keys"}},"backends":[{"name":"tools","revision":"v1","mcp":{"targets":[` + target + `]}}]}}`
+		if _, err := operatorGateway([]byte(raw), 8080); err == nil {
+			t.Fatal("unsupported identity substitution accepted")
+		}
+	}
+}
+
+func TestOperatorBrokerPreservesConsumerTrustAndRejectsLegacyFields(t *testing.T) {
+	t.Setenv("MANAGEMENT_URL", "")
+	t.Setenv("MANAGEMENT_TRUSTED_CA", "")
+	raw := `{"installation":"lab","auth":{"username":"broker","password":"secret"},"gateway":{"management_url":"http://management.test"},"services":[{"id":"team","name":"team","description":"Team","protocol":"llm","connection":{"url":"https://team.test/v1","trusted_ca":"PEM"},"plans":[]}]}`
+	config, err := operatorBroker([]byte(raw), 8123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(config)
+	if !strings.Contains(string(data), `"trusted_ca":"PEM"`) {
+		t.Fatal("offering trust lost")
+	}
+	if _, err := operatorBroker([]byte(strings.Replace(raw, `"installation":"lab"`, `"installation":"lab","unknown":"secret"`, 1)), 8123); err == nil {
+		t.Fatal("unknown operator fields accepted")
 	}
 }

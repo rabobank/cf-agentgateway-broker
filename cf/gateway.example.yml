@@ -1,0 +1,82 @@
+database:
+  service_name: agentgateway-state
+
+# Native provider/model blocks, passed through without field-by-field translation.
+llm:
+  providers:
+    - name: shared-azure
+      provider: azure
+      params:
+        azureResourceName: REPLACE_WITH_RESOURCE
+        azureResourceType: openAI
+        azureApiVersion: '2025-04-01-preview'
+        apiKey: REPLACE_WITH_PROVIDER_KEY
+  models:
+    - name: gpt-6-sol
+      provider: {reference: shared-azure}
+      params: {model: gpt-6-sol}
+    - name: chat-small
+      provider: {reference: shared-azure}
+      params: {model: REPLACE_WITH_SMALL_DEPLOYMENT}
+
+# Native catalog. Verify accounting identifiers/rates against actual usage.
+model_catalog:
+  providers:
+    openai:
+      models:
+        gpt-6-sol:
+          rates: {input: '2.00', output: '8.00'} # Illustrative USD / million tokens
+        REPLACE_WITH_SMALL_DEPLOYMENT:
+          rates: {input: '0.25', output: '1.00'}
+
+mcp:
+  session_key: REPLACE_WITH_STABLE_32_BYTE_HEX_KEY
+  caller_auth:
+    # Trust the issuer of the incoming CF workload assertion, not automatically
+    # the upstream token authority. Its audience must match federation trust.
+    issuer: https://uaa.example.com/oauth/token
+    audiences: [cf-agentgateway-mcp]
+    jwks: {url: https://uaa.example.com/token_keys}
+  backends:
+    - name: development
+      # Increment for incompatible target/auth/permission changes, not key rotation.
+      revision: v1
+      mcp:
+        targets:
+          - name: devops
+            mcp: {host: 'https://mcp.dev.azure.com/REPLACE_WITH_ORGANIZATION'}
+            policies:
+              requestHeaderModifier:
+                set: {X-MCP-Insiders: 'true'}
+              backendAuth:
+                oauthTokenExchange:
+                  host: https://login.microsoftonline.com
+                  path: /REPLACE_WITH_TENANT/oauth2/v2.0/token
+                  grantType: federatedClientCredentials
+                  subjectToken:
+                    tokenType: urn:ietf:params:oauth:token-type:jwt
+                  # Confirm the hosted MCP scope; the WIF spike leaves it open.
+                  scopes: [REPLACE_WITH_VERIFIED_MCP_SCOPE]
+                  clientAuth:
+                    method: clientSecretPost
+                    # CF integration marker, resolved by the gateway from the
+                    # persisted service-instance selection; not native syntax.
+                    clientId: {fromInstanceParameter: client_id}
+
+    - name: knowledge
+      revision: v1
+      mcp:
+        targets:
+          - name: docs
+            mcp: {host: 'https://knowledge.example.com/mcp'}
+            policies:
+              requestHeaderModifier:
+                # No upstream auth; caller/binding authorization still required.
+                remove: [authorization]
+
+capsules:
+  log_id: production # Must match broker installation
+  signing_seed: REPLACE_WITH_STABLE_ED25519_HEX_SEED
+  # witness:
+  #   url: https://witness.example.com
+  #   public_key: REPLACE_WITH_WITNESS_PUBLIC_KEY

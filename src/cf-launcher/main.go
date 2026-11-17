@@ -70,6 +70,33 @@ func run(mode string) error {
 	var config any
 	binary := "bin/broker"
 	args := []string{"broker", "-config", "config/runtime.json"}
+	if raw := os.Getenv("AGENTGATEWAY_CONFIG"); raw != "" {
+		for _, old := range []string{"INFERENCE_PLANS", "MCP_SERVERS", "GATEWAY_MODELS", "MODEL_CATALOG", "BROKER_PASSWORD", "SESSION_KEY", "INSTALLATION", "GATEWAY_URL", "MCP_URL", "GATEWAY_TRUSTED_CA", "MANAGEMENT_URL", "MANAGEMENT_TRUSTED_CA", "DATABASE_SERVICE_NAME"} {
+			if os.Getenv(old) != "" {
+				return fmt.Errorf("remove legacy %s when using AGENTGATEWAY_CONFIG", old)
+			}
+		}
+		var assembled map[string]any
+		var err error
+		switch mode {
+		case "broker":
+			assembled, err = operatorBroker([]byte(raw), port)
+		case "gateway":
+			assembled, err = operatorGateway([]byte(raw), port)
+			binary = "bin/agentgateway"
+			args = []string{"agentgateway", "-f", "config/runtime.json"}
+		default:
+			return errors.New("APP_ROLE must be broker or gateway")
+		}
+		if err != nil {
+			return err
+		}
+		save("config/runtime.json", assembled)
+		if err := os.Setenv("LD_LIBRARY_PATH", "lib"); err != nil {
+			return err
+		}
+		return syscall.Exec(binary, args, os.Environ())
+	}
 	switch mode {
 	case "broker":
 		var plans []map[string]any
