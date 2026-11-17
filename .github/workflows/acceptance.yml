@@ -39,8 +39,48 @@ jobs:
       - name: Vendor Rust dependencies
         run: devbox run vendor
 
+      - name: Compute Rust build cache keys
+        id: rust-cache-key
+        shell: bash
+        run: |
+          source scripts/agentgateway-version
+          # Keep the compiler/container and build recipe isolated, but allow
+          # Cargo to reuse dependencies across gateway source revisions.
+          recipe=$(sha256sum scripts/build | cut -d ' ' -f 1)
+          lock=$(sha256sum src/agentgateway/Cargo.lock | cut -d ' ' -f 1)
+          image=$(printf '%s' "$RUST_IMAGE" | sha256sum | cut -d ' ' -f 1)
+          prefix="rust-release-v1-${RUNNER_OS}-${RUNNER_ARCH}-${RUST_VERSION}-${image}-${recipe}"
+          {
+            echo "key=${prefix}-${lock}-${AGENTGATEWAY_REVISION}"
+            echo "restore-prefix=${prefix}-${lock}-"
+            echo "dependency-prefix=${prefix}-"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore Rust release build cache
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/cf-build-target-lowmem/release
+          key: ${{ steps.rust-cache-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.rust-cache-key.outputs.restore-prefix }}
+            ${{ steps.rust-cache-key.outputs.dependency-prefix }}
+
       - name: Build application binaries
         run: devbox run build
+
+      # Docker builds as root. The runner must be able to archive all target
+      # files, including when a later acceptance step fails.
+      - name: Prepare Rust cache ownership
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        run: sudo chown -R "$(id -u):$(id -g)" src/cf-build-target-lowmem/release
+
+      - name: Save Rust release build cache
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/cf-build-target-lowmem/release
+          key: ${{ steps.rust-cache-key.outputs.key }}
 
       # Image download/extraction is setup, not part of gateway readiness.
       - name: Prepare acceptance runtime image
