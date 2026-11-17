@@ -60,6 +60,9 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 				}
 				_ = json.Unmarshal(data, &native)
 				selected := mcpconfig.SelectedIdentity{BackendID: name, AuthMethod: "native"}
+				// Native client IDs can be fixed operator values or explicit
+				// instance-selection markers. Both identify the selected principal.
+				_ = json.Unmarshal(native.Policies.Auth.Exchange.Client.ID, &selected.ClientID)
 				var ref struct {
 					Parameter string `json:"fromInstanceParameter"`
 				}
