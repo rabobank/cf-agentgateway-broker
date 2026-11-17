@@ -33,6 +33,17 @@ class ConfigVarsTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertNotIn("secret-marker", result.stderr)
 
+    def test_cross_file_validation_rejects_unknown_resources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            broker = Path(directory) / "broker.yml"
+            gateway = Path(directory) / "gateway.yml"
+            broker.write_text('installation: lab\nservices:\n- protocol: llm\n  plans:\n  - access: {models: [missing]}\n')
+            gateway.write_text('llm: {models: []}\ncapsules: {log_id: lab}\n')
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("config-vars")),
+                                     "--check", str(broker), str(gateway)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown model", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
