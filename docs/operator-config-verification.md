@@ -42,7 +42,9 @@ contracts before the Go implementations.
   artifacts and do not verify the new Rust materialization path end to end.
 - The gateway submodule branch `feat/cf-operator-config` is published to
   `rkoster/agentgateway`; its pinned commit is
-  `122180422eb88d3376f877b9a65ebd3b31320fec`, available for CI checkout.
+  `a7f9b5191218935191b45b4250a627bc81ab0e18`, available for CI checkout. Missing or
+  incompatible shared MCP backends now omit the affected grant route rather than
+  preventing management and unrelated offerings from starting.
 - Run a real Azure DevOps WIF smoke test with confirmed hosted MCP scope/FIC
   settings. The referenced gist reports success but leaves those details open.
 
