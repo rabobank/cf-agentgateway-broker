@@ -81,5 +81,9 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 			return nil, nil, errors.New("unknown shared MCP backend")
 		}
 	}
+	selection := mcpconfig.Binding{Instance: mcpconfig.Instance{Selections: selections}}
+	if _, err := selection.TargetIdentities(); err != nil {
+		return nil, nil, err
+	}
 	return backend, selections, nil
 }

@@ -271,6 +271,10 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			return true
 		}
 		data, _ := json.Marshal(binding)
+		if _, err := binding.TargetIdentities(); err != nil {
+			fail(w, 503, "instance backend targets are ambiguous")
+			return true
+		}
 		route := binding.Route()
 		selections := append([]mcpconfig.BackendSelection(nil), instance.Selections...)
 		if len(selections) > 0 {

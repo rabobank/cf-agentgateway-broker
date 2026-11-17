@@ -298,11 +298,9 @@ func (s *Store) AuthorizeBinding(ctx context.Context, instance, binding, issuer,
 		}
 	}
 	selected := grant.Selected()
-	identities := map[string]mcpconfig.SelectedIdentity{}
-	for _, selection := range grant.Instance.Selections {
-		for target, identity := range selection.Identities {
-			identities[grant.TargetName()+"-"+selection.Name+"-"+target] = identity
-		}
+	identities, err := grant.TargetIdentities()
+	if err != nil {
+		return plugin.Identity{}, err
 	}
 	return plugin.Identity{Installation: s.logID, Instance: instance, Binding: binding, Target: grant.TargetName(), Org: grant.Instance.Org, Space: grant.Instance.Space, Account: grant.Account, SelectedIdentity: selected, TargetIdentities: identities}, nil
 }

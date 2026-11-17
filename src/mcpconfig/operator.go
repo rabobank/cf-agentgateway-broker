@@ -44,6 +44,23 @@ type BackendSelection struct {
 	TargetPrefix string                      `json:"targetPrefix"`
 	Identities   map[string]SelectedIdentity `json:"identities,omitempty"`
 }
+
+// TargetIdentities rejects ambiguous backend/target concatenations before a
+// grant can be published or used for authorization and capsule attribution.
+func (b Binding) TargetIdentities() (map[string]SelectedIdentity, error) {
+	identities := map[string]SelectedIdentity{}
+	for _, selection := range b.Instance.Selections {
+		for target, identity := range selection.Identities {
+			name := b.TargetName() + "-" + selection.Name + "-" + target
+			if _, exists := identities[name]; exists {
+				return nil, errors.New("shared MCP backends produce duplicate effective target names")
+			}
+			identities[name] = identity
+		}
+	}
+	return identities, nil
+}
+
 type GatewayOperator struct {
 	Database struct {
 		ServiceName string `json:"service_name"`

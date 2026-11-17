@@ -18,7 +18,7 @@ func TestSharedMCPRejectsCollidingTargetsAcrossBackends(t *testing.T) {
 			resources = append(resources, map[string]any{"value": map[string]any{
 				"name": pair[0], "revision": "v1",
 				"callerAuth": map[string]any{"issuer": "https://uaa.test", "audiences": []string{"exchange"}, "jwks": map[string]string{"url": "https://uaa.test/keys"}},
-				"targets": []any{map[string]any{"name": pair[1], "mcp": map[string]string{"host": "https://tools.test"}}},
+				"targets":    []any{map[string]any{"name": pair[1], "mcp": map[string]string{"host": "https://tools.test"}}},
 			}})
 		}
 		write(w, 200, map[string]any{"resources": resources})
