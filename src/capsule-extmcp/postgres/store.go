@@ -29,12 +29,17 @@ import (
 )
 
 type Store struct {
-	pool      *pgxpool.Pool
-	db        *sql.DB
-	artifacts *artifactpg.Store
-	logID     string
-	closed    atomic.Bool
+	pool             *pgxpool.Pool
+	db               *sql.DB
+	artifacts        *artifactpg.Store
+	logID            string
+	closed           atomic.Bool
+	backendRevisions map[string]string
 }
+
+// SetBackendRevisions installs this replica's operator contract before serving.
+// It is not a grant store: authorization still reads the live gateway resources.
+func (s *Store) SetBackendRevisions(revisions map[string]string) { s.backendRevisions = revisions }
 
 func (s *Store) LogID() string { return s.logID }
 
@@ -151,7 +156,9 @@ func validateMetadata(c plugin.Capsule) error {
 	if err := json.Unmarshal(c.Bytes, &payload); err != nil {
 		return err
 	}
-	if payload.Gateway.Identity != c.Identity || payload.Gateway.Phase != c.Phase || payload.Gateway.Tool != c.Tool || !slices.Equal(payload.Gateway.Backends, c.Backends) || c.Identity.Instance == "" || c.Identity.Installation == "" {
+	left, _ := json.Marshal(payload.Gateway.Identity)
+	right, _ := json.Marshal(c.Identity)
+	if string(left) != string(right) || payload.Gateway.Phase != c.Phase || payload.Gateway.Tool != c.Tool || !slices.Equal(payload.Gateway.Backends, c.Backends) || c.Identity.Instance == "" || c.Identity.Installation == "" {
 		return artifact.ErrInvalid
 	}
 	if payload.Chain.Parent != c.Parent || !payload.Timestamp.Equal(c.ObservedAt.Truncate(time.Microsecond)) {
@@ -285,8 +292,17 @@ func (s *Store) AuthorizeBinding(ctx context.Context, instance, binding, issuer,
 	if json.Unmarshal(data, &grant) != nil || grant.Revoked || grant.Account.Issuer != issuer || grant.Account.Subject != subject || grant.Instance.Installation != s.logID || grant.Instance.ID != instance || grant.ID != binding {
 		return plugin.Identity{}, errors.New("binding identity mismatch")
 	}
+	for _, selection := range grant.Instance.Selections {
+		if s.backendRevisions[selection.Name] != selection.Revision {
+			return plugin.Identity{}, errors.New("backend contract no longer available")
+		}
+	}
 	selected := grant.Selected()
-	return plugin.Identity{Installation: s.logID, Instance: instance, Binding: binding, Target: grant.TargetName(), Org: grant.Instance.Org, Space: grant.Instance.Space, Account: grant.Account, SelectedIdentity: selected}, nil
+	identities, err := grant.TargetIdentities()
+	if err != nil {
+		return plugin.Identity{}, err
+	}
+	return plugin.Identity{Installation: s.logID, Instance: instance, Binding: binding, Target: grant.TargetName(), Org: grant.Instance.Org, Space: grant.Instance.Space, Account: grant.Account, SelectedIdentity: selected, TargetIdentities: identities}, nil
 }
 
 func validTime(t time.Time) bool {

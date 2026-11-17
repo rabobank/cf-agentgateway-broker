@@ -142,3 +142,17 @@ var _ = Describe("a service instance", func() {
 		expectRequest(http.StatusUnauthorized, http.MethodPost, chatURL, chatBody, key, false)
 	})
 })
+
+var _ = Describe("consolidated operator configuration", func() {
+	It("provisions and binds an offering using only per-app configuration", func() {
+		e := startConfiguredEnvironment(true)
+		catalog := expectRequest(200, "GET", e.brokerURL()+"/v2/catalog", "", "", true)
+		Expect(string(catalog.body)).To(ContainSubstring(`"name":"inference"`))
+		path := e.brokerURL() + "/v2/service_instances/operator-instance"
+		body := fmt.Sprintf(`{"service_id":%q,"plan_id":%q}`, serviceID, planID)
+		expectRequest(201, "PUT", path, body, "", true)
+		bound := expectRequest(201, "PUT", path+"/service_bindings/app", body, "", true)
+		Expect(string(bound.body)).To(ContainSubstring(`"api_key":"sk-cf-`))
+		expectRequest(200, "DELETE", path+"?service_id="+serviceID+"&plan_id="+planID, "", "", true)
+	})
+})

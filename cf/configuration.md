@@ -1,5 +1,54 @@
 # Configuration reference
 
+## Consolidated operator configuration
+
+The CF manifest now accepts `broker_config` and `gateway_config`, each a **JSON
+string**, mapped to `AGENTGATEWAY_CONFIG` on the respective app. Start from
+`broker.example.yml` and `gateway.example.yml`. Convert with `./config-vars
+broker_config broker.yml` (or `gateway_config gateway.yml`). Both `config-vars`
+and `deploy` are standalone Go executables included in the release; no Python,
+Go installation or YAML tooling is needed on the operator's machine.
+Run `./config-vars --check broker.yml gateway.yml` before deployment to
+validate cross-file model/backend references, required identity parameters and
+the shared installation/log identity.
+
+`broker.yml` defines `installation`, `auth`, `gateway.management_url`, and
+`services`. Each service has stable `id`, `name`, `description`, `protocol`,
+`connection.url`, optional `connection.trusted_ca`, and `plans`. Plan names can
+repeat between services; plan IDs are globally unique. LLM plans have
+`access.models` and `budget: {usd: 10, window: 24h}`. MCP plans have
+`access.backends` and optional standard OSB
+`schemas.service_instance.create.parameters`. Supported parameter schemas are
+objects with `additionalProperties: false`, `required`, and named string
+properties (`type`, `description`, `pattern`). Unsupported constraints fail
+configuration validation. Binding parameters cannot change upstream identity.
+
+`gateway.yml` defines `database.service_name`, native `llm.providers` and
+`llm.models`, native `model_catalog` data, `mcp`, and `capsules`. Models reference
+providers with `provider: {reference: name}`; provider-specific fields pass through
+unchanged. CF supplies ports, database credentials, storage mode, internal
+listeners and enforcement/capsule wiring.
+
+`mcp.caller_auth` supplies native `issuer`, `audiences` (one exchange audience),
+and `jwks.url`. Trust the incoming CF workload assertion's issuer, independently
+of upstream OAuth authority. Each `mcp.backends` entry has `name`, an explicit
+`revision`, and native `mcp.targets`. Targets retain native authentication policies.
+Only federation `clientAuth.clientId` permits the integration marker
+`{fromInstanceParameter: client_id}`. Other fields remain operator-owned.
+Instance creation must supply the declared parameter. References and selections
+are gateway-owned; upstream secrets are not copied into grants.
+
+Keep `revision` stable for credential rotation. Change it for incompatible
+target/auth/scope changes; existing grants then fail closed and need explicit
+recreation. Missing referenced definitions also fail closed. Do not remove
+definitions while their instances exist. Keep `capsules.log_id` equal to broker
+`installation`; session/signing keys must remain stable across replicas/redeploys.
+Selected-identity capsules attribute selection, not proof of upstream auth.
+
+The sections below document the **legacy environment contract**, retained for
+development compatibility. Do not combine it with consolidated configuration;
+`deploy` removes known retired operator variables before restarting migrated apps.
+
 This reference covers the CF manifest, launcher, broker and capsule sidecar.
 Gateway provider/policy formats follow the agentgateway revision pinned in
 `scripts/agentgateway-version`. The broker adds no provider-specific defaults.

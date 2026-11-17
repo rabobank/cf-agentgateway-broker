@@ -30,9 +30,25 @@ CF MCP consumers -> gateway /mcp -> operator-configured shared MCP servers
 
 The gateway's API resources are authoritative. The broker manages them through the
 gateway API; gateway replicas persist configuration and usage in PostgreSQL.
-Raw admin/debug stays loopback-only; the management listener
-requires a separate operator token and app-to-app network policy. It is not
-attached to the public inference route.
+Raw admin/debug stays loopback-only; the management listener is exposed through
+a route-policy-enforcing identity domain, allowing only the broker app's rotating
+CF client identity. It is not attached to the public inference route.
+
+## Consolidated configuration and offerings
+
+See [the refactoring plan](configuration-refactoring-plan.md) and
+[operator configuration](../cf/configuration.md). The CF manifest supplies one
+`AGENTGATEWAY_CONFIG` JSON string to each app, converted from separate broker and
+gateway YAML files. Multiple independent offerings contain their own plans and
+consumer connection URLs. Native provider/model/backend blocks remain gateway
+operator configuration; CF listener, identity, authorization and capsule wiring
+is release-owned.
+
+New MCP instances store shared backend references/revisions and validated
+instance-time identity parameters. Grants contain no shared upstream credentials.
+The gateway resolves native backend policy from those references and generates
+binding-generation-specific target identities. Incompatible revisions fail closed;
+credential rotation within the same contract does not rewrite grants.
 
 ## Lifecycle
 

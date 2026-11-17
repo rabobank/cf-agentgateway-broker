@@ -1,0 +1,15 @@
+# Deployment-only placeholders for manifest.yml. Application configuration comes
+# from converted broker.yml and gateway.yml, not this file.
+gateway_app_name: agentgateway
+broker_app_name: agentgateway-broker
+stack: cflinuxfs5
+buildpack: binary_buildpack
+gateway_memory: 768M
+gateway_disk_quota: 1G
+gateway_instances: 2
+broker_memory: 128M
+broker_disk_quota: 1G
+broker_instances: 2
+gateway_route: agentgateway.apps.example.com
+broker_route: agentgateway-broker.apps.example.com
+database_service_name: agentgateway-state

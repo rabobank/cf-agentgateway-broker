@@ -5,7 +5,7 @@ as separate Cloud Foundry apps. PostgreSQL stores gateway configuration and usag
 
 ## Prerequisites
 
-- A CF CLI with `map-route --app-port` and `add-route-policy`, plus Python 3,
+- A CF CLI with `map-route --app-port` and `add-route-policy`,
   access to deploy apps and bind services; broker registration requires the relevant
   operator permissions.
 - A foundation with `cflinuxfs5`, the binary buildpack, container networking,
@@ -27,13 +27,55 @@ tar -xzf cf-agentgateway-broker-linux-amd64.tar.gz
 ```
 
 The archive contains this `README.md`, `configuration.md`, `manifest.yml`, `deploy`,
-`dev-vars.yml`, and the tested binaries under `dist/`. Run the following commands
+`dev-vars.yml`, the standalone `config-vars` converter, YAML examples, and the
+tested binaries under `dist/`. Both `deploy` and `config-vars` are compiled Go
+executables; no Python or Go runtime is required. Run the following commands
 from this directory.
 For source builds instead, initialize submodules, run `devbox run vendor` and
 `devbox run build` at the repository root, then run the deployment commands
 from `cf/`.
 
 ## 2. Configure
+
+### Application YAML configuration
+
+Keep deployment variables (app names, routes, sizing, database binding) in your
+vars file (start with `deployment.example.yml`). Copy `broker.example.yml` to private `broker.yml` and
+`gateway.example.yml` to private `gateway.yml`. These files contain native YAML
+lists/maps rather than JSON strings. Replace all example credentials, identities,
+resource names and illustrative prices. See [configuration](configuration.md).
+
+Use the bundled `config-vars` and `deploy` executables. In Bash, validate
+conversion in checked commands **before** using process substitution (failures
+inside process substitution do not automatically fail the outer command):
+
+```bash
+set -e
+./config-vars --check broker.yml gateway.yml
+./deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME \
+  --vars-file deployment-vars.yml \
+  --vars-file <(./config-vars broker_config broker.yml) \
+  --vars-file <(./config-vars gateway_config gateway.yml)
+```
+
+Run the conversion preflight with shell `set -e` or connect the commands with
+`&&`. The manifest places one JSON string in `AGENTGATEWAY_CONFIG` on each app.
+The sidecar reads its subsection independently. Backend configuration belongs to
+the gateway app; the broker has no database binding.
+
+MCP client identity is selected at instance creation, for example
+`cf create-service development-tools standard tools -c '{"client_id":"YOUR-APPLICATION-CLIENT-ID"}'`.
+Configure the external principal's federation trust and upstream permissions
+separately. The release neither creates that principal nor requires its secret.
+
+Existing instance-free deployments can replace the catalog directly, then run
+`cf update-service-broker` and enable access to the intended offerings. Do not use
+this as an automatic migration of existing instance identities. The helper
+removes retired environment settings before restarting; keep cryptographic keys
+and installation identity stable.
+
+The older configuration instructions below describe the legacy runtime format;
+the new manifest uses the consolidated placeholders shown above.
 
 See the [complete configuration reference](configuration.md) for every vars-file
 and environment name, required/default values, nested JSON fields, and examples.
@@ -114,7 +156,7 @@ Set `database_service_name` in `local-vars.yml` to that instance's name. Run the
 deployment helper from the bundle directory (or `cf/` in a source checkout):
 
 ```sh
-python3 deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml
+./deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml --vars-file <(./config-vars broker_config broker.yml) --vars-file <(./config-vars gateway_config gateway.yml)
 ```
 
 Replace the names, identity domain, and hostname with your configured values.
@@ -131,7 +173,7 @@ service binding does not necessarily create the required network policy.
 For the local lab using its existing secrets file:
 
 ```sh
-python3 deploy agentgateway agentgateway-broker apps.identity agentgateway-management --vars-file dev-vars.yml --vars-file local-secrets.yml
+./deploy agentgateway agentgateway-broker apps.identity agentgateway-management --vars-file dev-vars.yml --vars-file <(./config-vars broker_config broker.yml) --vars-file <(./config-vars gateway_config gateway.yml)
 ```
 
 Gorouter terminates public TLS and forwards inference to `$PORT`. Management

@@ -20,15 +20,7 @@ applications:
   env:
     APP_ROLE: gateway
     RUST_MIN_STACK: "16777216"
-    DATABASE_SERVICE_NAME: ((database_service_name))
-    GATEWAY_MODELS: ((gateway_models))
-    MODEL_CATALOG: ((model_catalog))
-    MCP_SERVERS: ((mcp_servers))
-    SESSION_KEY: ((mcp_session_key))
-    CAPSULE_LOG_ID: ((installation))
-    CAPSULE_SIGNING_SEED: ((capsule_signing_seed))
-    CAPSULE_WITNESS_URL: ((capsule_witness_url))
-    CAPSULE_WITNESS_PUBLIC_KEY: ((capsule_witness_public_key))
+    AGENTGATEWAY_CONFIG: ((gateway_config))
 - name: ((broker_app_name))
   path: dist/broker
   stack: ((stack))
@@ -41,12 +33,4 @@ applications:
   - route: ((broker_route))
   env:
     APP_ROLE: broker
-    BROKER_PASSWORD: ((broker_password))
-    INSTALLATION: ((installation))
-    MANAGEMENT_URL: ((management_url))
-    MANAGEMENT_TRUSTED_CA: ((management_trusted_ca))
-    GATEWAY_URL: ((gateway_url))
-    GATEWAY_TRUSTED_CA: ((trusted_ca))
-    INFERENCE_PLANS: ((inference_plans))
-    MCP_SERVERS: ((mcp_servers))
-    MCP_URL: ((mcp_url))
+    AGENTGATEWAY_CONFIG: ((broker_config))

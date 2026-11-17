@@ -48,6 +48,7 @@ type Config struct {
 	Certificate           string              `json:"certificate"`
 	PrivateKey            string              `json:"private_key"`
 	ServiceID             string              `json:"service_id"`
+	Services              []Offering          `json:"services,omitempty"`
 	InferencePlans        []InferencePlan     `json:"inference_plans"`
 	MCPServers            []mcpconfig.Backend `json:"mcp_servers,omitempty"`
 }
@@ -162,7 +163,15 @@ func (c Config) validate() error {
 			}
 		}
 	}
-	if len(ids) == 0 {
+	if len(c.Services) > 0 {
+		if len(ids) > 0 {
+			return errors.New("services cannot be combined with legacy plans")
+		}
+		if err := c.validateOfferings(); err != nil {
+			return err
+		}
+	}
+	if len(ids) == 0 && len(c.Services) == 0 {
 		return errors.New("at least one service plan is required")
 	}
 	if len(c.MCPServers) > 0 && c.MCPURL == "" {
@@ -174,12 +183,19 @@ func (c Config) validate() error {
 			return errors.New("invalid MCP URL: expected a parseable HTTP(S) URL with a host and without credentials, query, or fragment")
 		}
 	}
-	for name, value := range map[string]string{"listen": c.Listen, "username": c.Username, "password": c.Password, "installation": c.Installation, "service_id": c.ServiceID} {
+	if len(c.Services) == 0 && c.ServiceID == "" {
+		return errors.New("service_id is required")
+	}
+	for name, value := range map[string]string{"listen": c.Listen, "username": c.Username, "password": c.Password, "installation": c.Installation} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	for name, value := range map[string]string{"gateway_url": c.GatewayURL, "management_url": c.ManagementURL} {
+	urls := map[string]string{"management_url": c.ManagementURL}
+	if len(c.Services) == 0 {
+		urls["gateway_url"] = c.GatewayURL
+	}
+	for name, value := range urls {
 		u, err := url.Parse(value)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return fmt.Errorf("invalid %s: expected a parseable HTTP(S) URL with a host and without credentials, query, or fragment", name)
@@ -452,7 +468,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if b.serveMCP(w, r, parts) {
 		return
 	}
-	if len(b.cfg.MCPServers) > 0 && (r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch) {
+	if (len(b.cfg.MCPServers) > 0 || len(b.cfg.Services) > 0) && (r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch) {
 		instance, err := b.instance(r.Context(), parts[2])
 		if err != nil {
 			fail(w, 503, "cannot resolve instance ownership")
@@ -483,7 +499,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.PlanID = r.URL.Query().Get("plan_id")
 	}
 	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
-		if req.ServiceID != b.cfg.ServiceID || b.inferencePlan(req.PlanID) == nil {
+		if b.cfg.inference(req.ServiceID, req.PlanID) == nil {
 			fail(w, 400, "unknown service or plan")
 			return
 		}
@@ -527,6 +543,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		credentials := map[string]string{"url": b.cfg.GatewayURL, "api_key": existing.Value.Key, "trusted_ca": b.trustedCA}
+		if s, _ := b.cfg.offering(req.ServiceID, req.PlanID); s != nil {
+			credentials["url"], credentials["trusted_ca"] = s.Connection.URL, s.Connection.TrustedCA
+		}
 		if b.cfg.MCPURL != "" {
 			credentials["mcp_url"] = b.cfg.MCPURL
 		}
@@ -561,7 +580,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "credential generation failed")
 		return
 	}
-	plan := b.inferencePlan(req.PlanID)
+	plan := b.cfg.inference(req.ServiceID, req.PlanID)
 	key := Key{Key: "sk-cf-" + base64.RawURLEncoding.EncodeToString(secret), Metadata: map[string]any{
 		"name": "cf-" + id, labelPrefix + "instance": id, labelPrefix + "installation": b.cfg.Installation, labelPrefix + "service": req.ServiceID, labelPrefix + "plan": req.PlanID, labelPrefix + "fingerprint": fp, labelPrefix + "org": req.OrganizationGUID, labelPrefix + "space": req.SpaceGUID,
 	}, AllowedModels: plan.Models, Budgets: []Budget{{Name: "instance-spend", Limit: Limit{"USD", plan.Budget}, Window: map[string]string{"rolling": plan.Window}, Action: "Block"}}}
@@ -573,6 +592,27 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	write(w, 201, map[string]any{})
 }
 func (b *Broker) catalog(w http.ResponseWriter) {
+	if len(b.cfg.Services) > 0 {
+		services := []any{}
+		for _, s := range b.cfg.Services {
+			plans := []any{}
+			for _, p := range s.Plans {
+				v := map[string]any{"id": p.ID, "name": p.Name, "description": p.Description, "free": p.Free}
+				if p.Schemas != nil {
+					v["schemas"] = p.Schemas
+				}
+				if p.Budget != nil {
+					v["metadata"] = map[string]any{"models": p.Access.Models, "usd_allowance": p.Budget.USD, "window": p.Budget.Window, "accounting": "Post-response, epoch-aligned windows; concurrency and replica synchronization can overshoot. Unbind does not revoke the shared key."}
+				} else {
+					v["metadata"] = map[string]any{"protocol": "mcp"}
+				}
+				plans = append(plans, v)
+			}
+			services = append(services, map[string]any{"id": s.ID, "name": s.Name, "description": s.Description, "bindable": true, "plan_updateable": false, "instances_retrievable": false, "bindings_retrievable": false, "plans": plans})
+		}
+		write(w, 200, map[string]any{"services": services})
+		return
+	}
 	service := map[string]any{
 		"id": b.cfg.ServiceID, "name": "agentgateway", "description": "OpenAI-compatible inference with a shared service-instance spend allowance", "bindable": true, "plan_updateable": false, "instances_retrievable": false, "bindings_retrievable": false,
 		"plans": []any{},

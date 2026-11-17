@@ -44,17 +44,18 @@ type Account struct {
 	Subject string `json:"subject"`
 }
 type Instance struct {
-	Generation   string            `json:"generation"`
-	ID           string            `json:"id"`
-	Installation string            `json:"installation"`
-	ServiceID    string            `json:"service_id"`
-	PlanID       string            `json:"plan_id"`
-	Org          string            `json:"org"`
-	Space        string            `json:"space"`
-	Fingerprint  string            `json:"fingerprint"`
-	Parameters   map[string]string `json:"parameters,omitempty"`
-	Backend      Backend           `json:"backend"`
-	Revoked      bool              `json:"revoked,omitempty"`
+	Selections   []BackendSelection `json:"backend_selections,omitempty"`
+	Generation   string             `json:"generation"`
+	ID           string             `json:"id"`
+	Installation string             `json:"installation"`
+	ServiceID    string             `json:"service_id"`
+	PlanID       string             `json:"plan_id"`
+	Org          string             `json:"org"`
+	Space        string             `json:"space"`
+	Fingerprint  string             `json:"fingerprint"`
+	Parameters   map[string]string  `json:"parameters,omitempty"`
+	Backend      Backend            `json:"backend"`
+	Revoked      bool               `json:"revoked,omitempty"`
 }
 type Binding struct {
 	Generation string   `json:"generation"`
