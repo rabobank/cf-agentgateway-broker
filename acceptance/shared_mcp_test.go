@@ -5,12 +5,16 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,7 +50,7 @@ func startSharedMCPFixture(work string) *sharedMCPFixture {
 	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
 	Expect(err).NotTo(HaveOccurred())
 	f.assertion = unsigned + "." + enc(sig)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/keys" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]string{"kty": "RSA", "kid": "test", "alg": "RS256", "use": "sig", "n": enc(key.N.Bytes()), "e": enc(big.NewInt(int64(key.E)).Bytes())}}})
@@ -102,11 +106,31 @@ func startSharedMCPFixture(work string) *sharedMCPFixture {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 	}))
+	// Use a real CA-issued server chain. httptest's default certificate is a
+	// self-signed leaf, not a CA suitable for the gateway's native root loader.
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	Expect(err).NotTo(HaveOccurred())
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Acceptance fixture CA"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	Expect(err).NotTo(HaveOccurred())
+	ca, err := x509.ParseCertificate(caDER)
+	Expect(err).NotTo(HaveOccurred())
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "localhost"}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, DNSNames: []string{"localhost"}, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &key.PublicKey, caKey)
+	Expect(err).NotTo(HaveOccurred())
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER, caDER}, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
+	server.StartTLS()
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	leafCert, err := x509.ParseCertificate(leafDER)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = leafCert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "127.0.0.1"})
+	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(server.Close)
 	f.url = server.URL
 	// This public CA must be readable by the runtime image's unprivileged user,
 	// whose UID differs from the host runner. It contains no private key.
-	Expect(os.WriteFile(filepath.Join(work, "fixture-ca.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0644)).To(Succeed())
+	Expect(os.WriteFile(filepath.Join(work, "fixture-ca.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0644)).To(Succeed())
 	return f
 }
 
