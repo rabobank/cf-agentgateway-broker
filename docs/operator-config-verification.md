@@ -40,8 +40,9 @@ contracts before the Go implementations.
 - Rebuild the deployment bundle and run full acceptance, including the new
   consolidated-config scenario. Existing integration tests use existing gateway
   artifacts and do not verify the new Rust materialization path end to end.
-- Publish the local gateway submodule branch `feat/cf-operator-config` to its fork
-  before CI/other checkouts consume the new pinned commit. Nothing was pushed.
+- The gateway submodule branch `feat/cf-operator-config` is published to
+  `rkoster/agentgateway`; its pinned commit is
+  `122180422eb88d3376f877b9a65ebd3b31320fec`, available for CI checkout.
 - Run a real Azure DevOps WIF smoke test with confirmed hosted MCP scope/FIC
   settings. The referenced gist reports success but leaves those details open.
 
