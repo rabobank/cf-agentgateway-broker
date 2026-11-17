@@ -23,12 +23,11 @@ import (
 )
 
 const (
-	stackImage      = "ghcr.io/cloudfoundry/k8s/cflinuxfs5:latest"
-	providerKey     = "acceptance-provider-key"
-	managementToken = "acceptance-management-token"
-	brokerPassword  = "acceptance-broker-password"
-	model           = "acceptance-model"
-	managementPort  = 9090
+	stackImage     = "ghcr.io/cloudfoundry/k8s/cflinuxfs5:latest"
+	providerKey    = "acceptance-provider-key"
+	brokerPassword = "acceptance-broker-password"
+	model          = "acceptance-model"
+	managementPort = 9090
 )
 
 type environment struct {
@@ -188,7 +187,7 @@ func (e *environment) startGateway() {
 	catalog := map[string]any{"providers": map[string]any{"openai": map[string]any{"models": map[string]any{model: map[string]any{"rates": map[string]string{"input": "1000000", "output": "1000000"}}}}}}
 	e.startContainer("gateway", map[string]string{
 		"APP_ROLE": "gateway", "PORT": strconv.Itoa(e.gatewayPort),
-		"MANAGEMENT_TOKEN": managementToken, "GATEWAY_MODELS": jsonString(models), "MODEL_CATALOG": jsonString(catalog),
+		"RUST_MIN_STACK": "16777216", "GATEWAY_MODELS": jsonString(models), "MODEL_CATALOG": jsonString(catalog),
 		"DATABASE_SERVICE_NAME":      "acceptance-state",
 		"MCP_SERVERS":                jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),
 		"CAPSULE_LOG_ID":             "acceptance",
@@ -198,7 +197,7 @@ func (e *environment) startGateway() {
 		"VCAP_SERVICES":              jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}),
 	})
 	Eventually(func() int {
-		return status(http.MethodGet, "http://127.0.0.1:9090/api/runtime", "", managementToken, false)
+		return status(http.MethodGet, "http://127.0.0.1:9090/api/runtime", "", "", false)
 	}).WithTimeout(90*time.Second).WithPolling(250*time.Millisecond).Should(Equal(http.StatusOK), "gateway management did not become ready")
 }
 
@@ -207,7 +206,7 @@ func (e *environment) startBroker() {
 	e.brokerPort = freePort()
 	e.startContainer("broker", map[string]string{
 		"APP_ROLE": "broker", "PORT": strconv.Itoa(e.brokerPort), "BROKER_PASSWORD": brokerPassword,
-		"INSTALLATION": "acceptance", "MANAGEMENT_URL": "http://127.0.0.1:9090", "MANAGEMENT_TOKEN": managementToken,
+		"INSTALLATION": "acceptance", "MANAGEMENT_URL": "http://127.0.0.1:9090",
 		"GATEWAY_URL":     fmt.Sprintf("http://127.0.0.1:%d/v1", e.gatewayPort),
 		"INFERENCE_PLANS": jsonString([]any{map[string]any{"id": "eba8b5b0-e8a7-49cb-8188-cfa52ed43bdd", "name": "acceptance-inference", "description": "Acceptance inference allowance", "free": true, "models": []string{model}, "budget": 20, "window": "24h"}}),
 		"MCP_SERVERS":     jsonString([]any{map[string]string{"name": "fixture", "url": e.mcpURL}}),

@@ -121,15 +121,15 @@ for index in 0 1; do
       config:{adminAddr:("127.0.0.1:"+(($port+2)|tostring)),readinessAddr:("127.0.0.1:"+(($port+3)|tostring)),statsAddr:("127.0.0.1:"+(($port+4)|tostring)),storage:{mode:"hybrid"},database:{url:$db},modelCatalog:[{file:$catalog}]},
       gateways:{inference:{port:$port,bindAddress:"127.0.0.1"},management:{port:($port+1),bindAddress:"127.0.0.1"}},
       llm:{gateways:["inference"],models:[{name:"fixture-model",provider:"openAI",params:{model:"fixture-model",apiKey:"provider-fixture",baseUrl:$provider}}],policies:{apiKey:{mode:"strict",keys:[]}}},
-      ui:{gateways:["management"],policies:{apiKey:{mode:"strict",keys:[{key:"management-fixture"}]}}}
+      ui:{gateways:["management"]}
     }' >"$work/gateway-$index.json"
   start_gateway "$index"
-  eventually "replica $index management API without UI assets" 200 "${management[index]}/api/runtime" GET '' management-fixture
+  eventually "replica $index management API without UI assets" 200 "${management[index]}/api/runtime"
 done
-expect 401 "${management[0]}/api/config/resources/llm.apiKey"
+expect 200 "${management[0]}/api/config/resources/llm.apiKey"
 key='sk-shared-fixture'
 resource=$(jq -n --arg key "$key" '{resources:[{value:{key:$key,metadata:{name:"shared-fixture","cf.agentgateway-broker/instance":"instance"},allowedModels:["fixture-model"],budgets:[{name:"shared",limit:{unit:"USD",amount:3},window:{rolling:"24h"},onBudgetExceeded:"Block"}]}}]}')
-expect 200 "${management[0]}/api/config/resources/llm.apiKey" PUT "$resource" management-fixture
+expect 200 "${management[0]}/api/config/resources/llm.apiKey" PUT "$resource"
 id=$(jq -er '.resources[0].id' "$work/response")
 jq -e --arg key "$key" '.resources[0].value | .key == $key and .metadata["cf.agentgateway-broker/instance"] == "instance"' "$work/response" >/dev/null
 for index in 0 1; do eventually "key active on replica $index" 200 "${inference[index]}/v1/models" GET '' "$key"; done
@@ -144,10 +144,10 @@ for index in 0 1; do eventually "shared USD exhaustion reaches replica $index" 4
 kill -TERM "${gateway_pids[1]}"; wait "${gateway_pids[1]}"
 start_gateway 1
 eventually 'restart retains budget usage' 429 "${inference[1]}/v1/chat/completions" POST "$chat" "$key"
-expect 200 "${management[0]}/api/config/resources/llm.apiKey/$id" DELETE '' management-fixture
+expect 200 "${management[0]}/api/config/resources/llm.apiKey/$id" DELETE
 for index in 0 1; do eventually "deletion revokes replica $index" 401 "${inference[index]}/v1/models" GET '' "$key"; done
 broker_url="http://127.0.0.1:$((base+12))"
-jq -n --arg listen "127.0.0.1:$((base+12))" --arg gateway "${inference[0]}/v1" --arg management "${management[0]}" '{listen:$listen,username:"broker",password:"broker-fixture",installation:"dev",gateway_url:$gateway,management_url:$management,management_token:"management-fixture",service_id:"service",inference_plans:[{id:"plan",name:"dev-inference",description:"Development fixture allowance",free:true,models:["fixture-model"],budget:100,window:"24h"}]}' >"$work/broker.json"
+jq -n --arg listen "127.0.0.1:$((base+12))" --arg gateway "${inference[0]}/v1" --arg management "${management[0]}" '{listen:$listen,username:"broker",password:"broker-fixture",installation:"dev",gateway_url:$gateway,management_url:$management,service_id:"service",inference_plans:[{id:"plan",name:"dev-inference",description:"Development fixture allowance",free:true,models:["fixture-model"],budget:100,window:"24h"}]}' >"$work/broker.json"
 "$broker" -config "$work/broker.json" >"$work/broker.log" 2>&1 & pids+=("$!")
 eventually 'broker readiness against gateway API' 200 "$broker_url/ready"
 instance="$broker_url/v2/service_instances/dev-instance"

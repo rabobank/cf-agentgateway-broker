@@ -77,8 +77,9 @@ jobs:
             --transform='s|^cf/configuration.md$|configuration.md|' \
             --transform='s|^cf/manifest.yml$|manifest.yml|' \
             --transform='s|^cf/dev-vars.yml$|dev-vars.yml|' \
+            --transform='s|^cf/deploy$|deploy|' \
             --transform='s|^cf/dist/|dist/|' \
-            cf/README.md cf/configuration.md cf/manifest.yml cf/dev-vars.yml \
+            cf/README.md cf/configuration.md cf/manifest.yml cf/dev-vars.yml cf/deploy \
             cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin
           cd "$RUNNER_TEMP/release-bundles"
           sha256sum ./*.tar.gz > SHA256SUMS

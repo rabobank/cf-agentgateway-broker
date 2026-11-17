@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,21 +33,23 @@ import (
 const labelPrefix = "cf.agentgateway-broker/"
 
 type Config struct {
-	Listen          string              `json:"listen"`
-	Username        string              `json:"username"`
-	Password        string              `json:"password"`
-	Installation    string              `json:"installation"`
-	GatewayURL      string              `json:"gateway_url"`
-	MCPURL          string              `json:"mcp_url"`
-	ManagementURL   string              `json:"management_url"`
-	ManagementToken string              `json:"management_token"`
-	CAFile          string              `json:"ca_file"`
-	TrustedCAFile   string              `json:"trusted_ca_file"`
-	Certificate     string              `json:"certificate"`
-	PrivateKey      string              `json:"private_key"`
-	ServiceID       string              `json:"service_id"`
-	InferencePlans  []InferencePlan     `json:"inference_plans"`
-	MCPServers      []mcpconfig.Backend `json:"mcp_servers,omitempty"`
+	Listen                string              `json:"listen"`
+	Username              string              `json:"username"`
+	Password              string              `json:"password"`
+	Installation          string              `json:"installation"`
+	GatewayURL            string              `json:"gateway_url"`
+	MCPURL                string              `json:"mcp_url"`
+	ManagementURL         string              `json:"management_url"`
+	CAFile                string              `json:"ca_file"`
+	CADirectory           string              `json:"ca_directory"`
+	ManagementCertificate string              `json:"management_certificate"`
+	ManagementPrivateKey  string              `json:"management_private_key"`
+	TrustedCAFile         string              `json:"trusted_ca_file"`
+	Certificate           string              `json:"certificate"`
+	PrivateKey            string              `json:"private_key"`
+	ServiceID             string              `json:"service_id"`
+	InferencePlans        []InferencePlan     `json:"inference_plans"`
+	MCPServers            []mcpconfig.Backend `json:"mcp_servers,omitempty"`
 }
 
 type InferencePlan struct {
@@ -185,6 +188,12 @@ func (c Config) validate() error {
 	if (c.Certificate == "") != (c.PrivateKey == "") {
 		return errors.New("certificate and private key must be configured together")
 	}
+	if (c.ManagementCertificate == "") != (c.ManagementPrivateKey == "") {
+		return errors.New("management_certificate and management_private_key must be configured together")
+	}
+	if c.ManagementCertificate != "" && !strings.HasPrefix(c.ManagementURL, "https://") {
+		return errors.New("management client certificates require an HTTPS management_url")
+	}
 	return nil
 }
 func newBroker(c Config) (*Broker, error) {
@@ -192,19 +201,51 @@ func newBroker(c Config) (*Broker, error) {
 		return nil, err
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-	if c.CAFile != "" {
+	if c.CAFile != "" || c.CADirectory != "" {
 		roots, err := x509.SystemCertPool()
 		if err != nil {
 			roots = x509.NewCertPool()
 		}
-		pem, err := os.ReadFile(c.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read management ca_file: %w", err)
+		files := []string{}
+		if c.CAFile != "" {
+			files = append(files, c.CAFile)
 		}
-		if !roots.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("management ca_file %q: no PEM certificates found", c.CAFile)
+		if c.CADirectory != "" {
+			entries, err := os.ReadDir(c.CADirectory)
+			if err != nil {
+				return nil, fmt.Errorf("read management ca_directory: %w", err)
+			}
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					files = append(files, filepath.Join(c.CADirectory, entry.Name()))
+				}
+			}
+		}
+		for _, file := range files {
+			pem, err := os.ReadFile(file)
+			if err != nil {
+				return nil, fmt.Errorf("read management CA: %w", err)
+			}
+			if !roots.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("management CA %q: no PEM certificates found", file)
+			}
 		}
 		tlsConfig.RootCAs = roots
+	}
+	if c.ManagementCertificate != "" {
+		// Diego replaces the identity files during rotation. Reload on every
+		// handshake and leave TLS session caching disabled.
+		load := func() (*tls.Certificate, error) {
+			cert, err := tls.LoadX509KeyPair(c.ManagementCertificate, c.ManagementPrivateKey)
+			if err != nil {
+				return nil, fmt.Errorf("load management client identity: %w", err)
+			}
+			return &cert, nil
+		}
+		if _, err := load(); err != nil {
+			return nil, err
+		}
+		tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return load() }
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
@@ -247,9 +288,6 @@ func (b *Broker) management(ctx context.Context, method, kind, path string, body
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if b.cfg.ManagementToken != "" {
-		req.Header.Set("Authorization", "Bearer "+b.cfg.ManagementToken)
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {

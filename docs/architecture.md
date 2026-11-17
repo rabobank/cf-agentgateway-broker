@@ -9,7 +9,7 @@ legacy global MCP entries retain the shared-key model described here.
 ```text
 Cloud Controller -> CF HTTPS route -> stateless Go OSB broker
                                          |
-                              private apps.internal:9090
+                              mTLS apps.identity:443 → management destination :9090
                                          |
 CF consumers -> CF HTTPS route -> agentgateway replicas
                                          |

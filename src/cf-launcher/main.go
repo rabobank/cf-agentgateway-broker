@@ -79,7 +79,14 @@ func run(mode string) error {
 		if plans == nil {
 			return errors.New("INFERENCE_PLANS must be a JSON array, not null")
 		}
-		config = map[string]any{"listen": fmt.Sprintf("0.0.0.0:%d", port), "username": "broker", "password": required("BROKER_PASSWORD"), "installation": required("INSTALLATION"), "gateway_url": required("GATEWAY_URL"), "management_url": required("MANAGEMENT_URL"), "management_token": required("MANAGEMENT_TOKEN"), "service_id": "1b0b97a6-41df-4a39-9b23-53f17a5f85be", "inference_plans": plans}
+		management, err := managementConfig()
+		if err != nil {
+			return err
+		}
+		config = map[string]any{"listen": fmt.Sprintf("0.0.0.0:%d", port), "username": "broker", "password": required("BROKER_PASSWORD"), "installation": required("INSTALLATION"), "gateway_url": required("GATEWAY_URL"), "management_url": required("MANAGEMENT_URL"), "service_id": "1b0b97a6-41df-4a39-9b23-53f17a5f85be", "inference_plans": plans}
+		for key, value := range management {
+			config.(map[string]any)[key] = value
+		}
 		mcp, err := mcpConfig(os.Getenv("MCP_SERVERS"))
 		if err != nil {
 			return err
@@ -120,7 +127,7 @@ func run(mode string) error {
 			"config":   map[string]any{"adminAddr": "127.0.0.1:15000", "storage": map[string]any{"mode": "hybrid"}, "database": map[string]any{"url": uri}, "modelCatalog": []any{map[string]any{"file": path}}},
 			"gateways": map[string]any{"inference": map[string]any{"port": port}, "management": map[string]any{"port": 9090}},
 			"llm":      map[string]any{"gateways": []string{"inference"}, "models": models, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{}}, "authorization": map[string]any{"rules": []string{`(request.method == "GET" && request.path == "/v1/models") || (request.method == "POST" && request.path == "/v1/chat/completions")`}}}},
-			"ui":       map[string]any{"gateways": []string{"management"}, "policies": map[string]any{"apiKey": map[string]any{"mode": "strict", "keys": []any{map[string]any{"key": required("MANAGEMENT_TOKEN")}}}}},
+			"ui":       map[string]any{"gateways": []string{"management"}},
 		}
 		if err := configureMCP(config.(map[string]any), os.Getenv("MCP_SERVERS"), os.Getenv("SESSION_KEY")); err != nil {
 			return err
@@ -138,6 +145,31 @@ func run(mode string) error {
 		return fmt.Errorf("execute %q: %w", binary, err)
 	}
 	return nil
+}
+
+func managementConfig() (map[string]any, error) {
+	config := map[string]any{}
+	cert, key := os.Getenv("CF_INSTANCE_CERT"), os.Getenv("CF_INSTANCE_KEY")
+	if cert != "" || key != "" || os.Getenv("VCAP_APPLICATION") != "" {
+		if cert == "" || key == "" {
+			return nil, errors.New("CF_INSTANCE_CERT and CF_INSTANCE_KEY are required for management mTLS on CF")
+		}
+		u, err := url.Parse(os.Getenv("MANAGEMENT_URL"))
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return nil, errors.New("MANAGEMENT_URL must be HTTPS for management mTLS on CF")
+		}
+		config["management_certificate"], config["management_private_key"] = cert, key
+	}
+	if directory := os.Getenv("CF_SYSTEM_CERT_PATH"); directory != "" {
+		config["ca_directory"] = directory
+	}
+	if ca := os.Getenv("MANAGEMENT_TRUSTED_CA"); ca != "" {
+		if err := os.WriteFile("config/management-ca.pem", []byte(ca), 0600); err != nil {
+			return nil, err
+		}
+		config["ca_file"] = "config/management-ca.pem"
+	}
+	return config, nil
 }
 func main() {
 	if e := run(required("APP_ROLE")); e != nil {

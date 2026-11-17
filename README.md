@@ -11,10 +11,40 @@ headless [agentgateway](https://agentgateway.dev/) deployed as Cloud Foundry app
 - `capsule-extmcp`: Go sidecar per gateway for shared MCP authentication and
   service-instance-aware capsules with a PostgreSQL-backed checkpointed log.
 
-CF routes terminate TLS and distribute inference connections. Private container
-network policies restrict access to gateway management. App bindings and service keys receive `url`, `api_key`, and PEM
+CF routes terminate TLS and distribute inference connections. The broker accesses
+gateway management through an mTLS identity route: HTTPS port 443 on the router
+forwards to gateway port 9090, with a route policy allowing only the broker app.
+CF instance certificates authenticate the broker; no shared management token or
+broker-to-gateway network policy is needed. App bindings and service keys receive `url`, `api_key`, and PEM
 `trusted_ca`. All bindings for an instance share its key and best-effort USD budget.
 Unbind preserves the key; deprovision revokes it.
+
+Use a foundation with an mTLS domain that enforces route policies (for example,
+`apps.identity`), a CLI supporting `add-route-policy` and `map-route --app-port`,
+and Python 3. After unpacking a release, or building and entering `cf/`:
+
+1. Copy `dev-vars.yml` to a private `local-vars.yml` and configure the app names,
+   routes, existing PostgreSQL service, provider models, plans and secrets. Set
+   `management_url` to `https://YOUR_MANAGEMENT_HOSTNAME.apps.identity` and
+   `management_trusted_ca` to an empty string when CF's mounted trust suffices,
+   or supply the management CA PEM.
+2. Target your org and space, then deploy:
+
+   ```sh
+   cf target -o YOUR_ORG -s YOUR_SPACE
+   python3 deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml
+   ```
+
+   The helper uploads both apps, maps management port 9090, configures the
+   broker-only route policy, and starts the apps. Existing apps are stopped during
+   upload. For an existing token-based installation, first follow the
+   [migration instructions](cf/README.md#migrating-an-existing-token-based-deployment)
+   to remove its legacy management route and network policy.
+3. [Register the broker and verify service access](cf/README.md#4-register-and-use-the-broker).
+
+The [deployment guide](cf/README.md) includes prerequisites, configuration,
+migration and verification details. `RUST_MIN_STACK=16777216` is fixed in the
+gateway manifest.
 
 ## Development
 
@@ -52,7 +82,7 @@ To publish a release, run the **Release** GitHub Actions workflow on the default
 branch with a new stable version such as `v1.2.3`. It runs acceptance tests before
 creating the release, then attaches a single tested Linux AMD64 deployment
 tarball and its SHA-256 checksum. Unpack it and follow its README to configure
-the included manifest and deploy with `cf push`. The checked-in `cf/dev-vars.yml`
+the included manifest and deploy with `python3 deploy ...`. The checked-in `cf/dev-vars.yml`
 contains the local lab's non-secret settings; `cf/local-secrets.yml` holds the
 lab's private values and is ignored by Git.
 

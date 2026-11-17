@@ -59,8 +59,10 @@ a PostgreSQL binding. The broker has no database binding or connection.
 | `installation` | `INSTALLATION` | Broker | Required stable nonempty namespace for this installation's gateway-owned resources. |
 | `installation` | `CAPSULE_LOG_ID` | Sidecar | Required stable shared producer-log identity. Manifest uses the same value as `INSTALLATION`. |
 | `broker_password` | `BROKER_PASSWORD` | Broker | Required secret string. Launcher fixes OSB Basic-auth username to `broker`. |
-| `management_token` | `MANAGEMENT_TOKEN` | Gateway, broker | Required secret string, identical on both apps; broker sends it as a Bearer token. |
-| `management_url` | `MANAGEMENT_URL` | Broker | Required HTTP(S) URL with host, no userinfo/query/fragment. Typically `http://gateway-management.apps.internal:9090`. Resource paths are appended to this base. |
+| `management_url` | `MANAGEMENT_URL` | Broker | Required HTTPS identity-route URL, e.g. `https://gateway-management.apps.identity` (router port 443, destination port 9090). No userinfo/query/fragment. Resource paths are appended to this base. |
+| `management_trusted_ca` | `MANAGEMENT_TRUSTED_CA` | Broker | Optional PEM management CA added to system and platform roots. Set `''` when platform trust suffices. Separate from consumer inference trust. |
+| CF supplied | `CF_INSTANCE_CERT`, `CF_INSTANCE_KEY` | Broker | Required on CF; client identity file paths, reloaded for every new management TLS handshake. |
+| CF supplied | `CF_SYSTEM_CERT_PATH` | Broker | Optional directory of platform-mounted PEM trust certificates, added to management TLS roots. |
 | `gateway_url` | `GATEWAY_URL` | Broker | Required HTTP(S) URL with host, no userinfo/query/fragment. Public inference base, typically `https://gateway.apps.example/v1`; returned in inference bindings. |
 | `trusted_ca` | `GATEWAY_TRUSTED_CA` | Broker | Optional PEM consumer trust bundle. Empty means consumer system trust; does not configure management TLS trust. |
 | `inference_plans` | `INFERENCE_PLANS` | Broker | Required JSON array; `[]` disables inference plans. See [inference plans](#inference-plans). |
@@ -341,10 +343,11 @@ JSON fields are rejected. Arrays here are native JSON, not encoded JSON strings.
 | `installation` | Required stable installation namespace. |
 | `service_id` | Required nonempty OSB ID; launcher fixes `1b0b97a6-41df-4a39-9b23-53f17a5f85be`. |
 | `gateway_url`, `management_url` | Required URLs with rules above. |
-| `management_token` | Optional directly, but required with bundled token-protected gateway. |
+| `management_certificate`, `management_private_key` | Optional management client TLS file paths; configure both or neither. Require HTTPS. CF launcher uses instance identity paths. Reloaded for every handshake. |
+| `ca_directory` | Optional directory of PEM management CA files added to system roots. CF launcher uses `CF_SYSTEM_CERT_PATH`. |
 | `mcp_url` | Required with nonempty `mcp_servers`; optional otherwise. |
 | `inference_plans`, `mcp_servers` | JSON arrays with schemas above; at least one published plan. |
-| `ca_file` | Optional PEM path added to system roots for broker-to-management TLS; not exposed by CF launcher. |
+| `ca_file` | Optional PEM path added to system roots for broker-to-management TLS; launcher writes `MANAGEMENT_TRUSTED_CA` here. |
 | `trusted_ca_file` | Optional PEM path returned to consumers; launcher writes it from `GATEWAY_TRUSTED_CA`. |
 | `certificate`, `private_key` | Optional broker server TLS file paths; configure both or neither. CF normally uses Gorouter TLS termination. |
 
@@ -356,8 +359,9 @@ JSON fields are rejected. Arrays here are native JSON, not encoded JSON strings.
   "installation":"example-installation",
   "service_id":"1b0b97a6-41df-4a39-9b23-53f17a5f85be",
   "gateway_url":"https://gateway.apps.example/v1",
-  "management_url":"https://management.example:9090",
-  "management_token":"REPLACE_WITH_MANAGEMENT_TOKEN",
+  "management_url":"https://management.apps.identity",
+  "management_certificate":"/etc/cf-instance-credentials/instance.crt",
+  "management_private_key":"/etc/cf-instance-credentials/instance.key",
   "ca_file":"/etc/gateway/management-ca.pem",
   "inference_plans":[
     {"id":"inference-basic","name":"basic","description":"Shared inference allowance","free":true,"models":["chat-small"],"budget":10,"window":"24h"}

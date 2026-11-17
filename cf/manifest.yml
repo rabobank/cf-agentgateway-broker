@@ -21,7 +21,6 @@ applications:
     APP_ROLE: gateway
     RUST_MIN_STACK: "16777216"
     DATABASE_SERVICE_NAME: ((database_service_name))
-    MANAGEMENT_TOKEN: ((management_token))
     GATEWAY_MODELS: ((gateway_models))
     MODEL_CATALOG: ((model_catalog))
     MCP_SERVERS: ((mcp_servers))
@@ -45,7 +44,7 @@ applications:
     BROKER_PASSWORD: ((broker_password))
     INSTALLATION: ((installation))
     MANAGEMENT_URL: ((management_url))
-    MANAGEMENT_TOKEN: ((management_token))
+    MANAGEMENT_TRUSTED_CA: ((management_trusted_ca))
     GATEWAY_URL: ((gateway_url))
     GATEWAY_TRUSTED_CA: ((trusted_ca))
     INFERENCE_PLANS: ((inference_plans))
