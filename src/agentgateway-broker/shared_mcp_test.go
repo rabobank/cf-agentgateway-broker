@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,28 @@ import (
 	"sync"
 	"testing"
 )
+
+func TestSharedMCPRejectsCollidingTargetsAcrossBackends(t *testing.T) {
+	b, _ := fixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resources := []any{}
+		for _, pair := range [][2]string{{"a-b", "c"}, {"a", "b-c"}} {
+			resources = append(resources, map[string]any{"value": map[string]any{
+				"name": pair[0], "revision": "v1",
+				"callerAuth": map[string]any{"issuer": "https://uaa.test", "audiences": []string{"exchange"}, "jwks": map[string]string{"url": "https://uaa.test/keys"}},
+				"targets": []any{map[string]any{"name": pair[1], "mcp": map[string]string{"host": "https://tools.test"}}},
+			}})
+		}
+		write(w, 200, map[string]any{"resources": resources})
+	}))
+	defer server.Close()
+	b.cfg.ManagementURL = server.URL
+	var plan OfferingPlan
+	plan.Access.Backends = []string{"a-b", "a"}
+	if _, _, err := b.resolveShared(context.Background(), &plan, nil); err == nil {
+		t.Fatal("ambiguous target names must be rejected before provisioning/grant publication")
+	}
+}
 
 func TestSharedMCPInstanceIdentityRecoveryAndOrphanCleanup(t *testing.T) {
 	b, _ := fixture(t)
