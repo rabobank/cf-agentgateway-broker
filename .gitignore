@@ -21,4 +21,6 @@ nix-*/
 /src/cf-build-target-lowmem/
 cf/broker.yml
 cf/gateway.yml
+cf/config-vars
+cf/deploy
 **/__pycache__/

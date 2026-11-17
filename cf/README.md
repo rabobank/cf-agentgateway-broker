@@ -5,7 +5,7 @@ as separate Cloud Foundry apps. PostgreSQL stores gateway configuration and usag
 
 ## Prerequisites
 
-- A CF CLI with `map-route --app-port` and `add-route-policy`, plus Python 3,
+- A CF CLI with `map-route --app-port` and `add-route-policy`,
   access to deploy apps and bind services; broker registration requires the relevant
   operator permissions.
 - A foundation with `cflinuxfs5`, the binary buildpack, container networking,
@@ -27,7 +27,9 @@ tar -xzf cf-agentgateway-broker-linux-amd64.tar.gz
 ```
 
 The archive contains this `README.md`, `configuration.md`, `manifest.yml`, `deploy`,
-`dev-vars.yml`, and the tested binaries under `dist/`. Run the following commands
+`dev-vars.yml`, the standalone `config-vars` converter, YAML examples, and the
+tested binaries under `dist/`. Both `deploy` and `config-vars` are compiled Go
+executables; no Python or Go runtime is required. Run the following commands
 from this directory.
 For source builds instead, initialize submodules, run `devbox run vendor` and
 `devbox run build` at the repository root, then run the deployment commands
@@ -43,17 +45,17 @@ vars file (start with `deployment.example.yml`). Copy `broker.example.yml` to pr
 lists/maps rather than JSON strings. Replace all example credentials, identities,
 resource names and illustrative prices. See [configuration](configuration.md).
 
-Install `requirements.txt` in a Python virtual environment. In Bash, validate
+Use the bundled `config-vars` and `deploy` executables. In Bash, validate
 conversion in checked commands **before** using process substitution (failures
 inside process substitution do not automatically fail the outer command):
 
 ```bash
 set -e
-python3 config-vars --check broker.yml gateway.yml
-python3 deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME \
+./config-vars --check broker.yml gateway.yml
+./deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME \
   --vars-file deployment-vars.yml \
-  --vars-file <(python3 config-vars broker_config broker.yml) \
-  --vars-file <(python3 config-vars gateway_config gateway.yml)
+  --vars-file <(./config-vars broker_config broker.yml) \
+  --vars-file <(./config-vars gateway_config gateway.yml)
 ```
 
 Run the conversion preflight with shell `set -e` or connect the commands with
@@ -154,7 +156,7 @@ Set `database_service_name` in `local-vars.yml` to that instance's name. Run the
 deployment helper from the bundle directory (or `cf/` in a source checkout):
 
 ```sh
-python3 deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml
+./deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml --vars-file <(./config-vars broker_config broker.yml) --vars-file <(./config-vars gateway_config gateway.yml)
 ```
 
 Replace the names, identity domain, and hostname with your configured values.
@@ -171,7 +173,7 @@ service binding does not necessarily create the required network policy.
 For the local lab using its existing secrets file:
 
 ```sh
-python3 deploy agentgateway agentgateway-broker apps.identity agentgateway-management --vars-file dev-vars.yml --vars-file local-secrets.yml
+./deploy agentgateway agentgateway-broker apps.identity agentgateway-management --vars-file dev-vars.yml --vars-file <(./config-vars broker_config broker.yml) --vars-file <(./config-vars gateway_config gateway.yml)
 ```
 
 Gorouter terminates public TLS and forwards inference to `$PORT`. Management

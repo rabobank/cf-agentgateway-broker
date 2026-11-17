@@ -4,10 +4,11 @@
 
 The CF manifest now accepts `broker_config` and `gateway_config`, each a **JSON
 string**, mapped to `AGENTGATEWAY_CONFIG` on the respective app. Start from
-`broker.example.yml` and `gateway.example.yml`. Convert with `python3 config-vars
-broker_config broker.yml` (or `gateway_config gateway.yml`). Install the pinned
-converter dependency with `python3 -m pip install -r requirements.txt`.
-Run `python3 config-vars --check broker.yml gateway.yml` before deployment to
+`broker.example.yml` and `gateway.example.yml`. Convert with `./config-vars
+broker_config broker.yml` (or `gateway_config gateway.yml`). Both `config-vars`
+and `deploy` are standalone Go executables included in the release; no Python,
+Go installation or YAML tooling is needed on the operator's machine.
+Run `./config-vars --check broker.yml gateway.yml` before deployment to
 validate cross-file model/backend references, required identity parameters and
 the shared installation/log identity.
 

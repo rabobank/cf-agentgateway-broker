@@ -130,18 +130,34 @@ func TestStartupAndRouteOverridesRejectedBeforeCF(t *testing.T) {
 }
 
 func TestProcessSubstitutionSurvivesLaunchingCF(t *testing.T) {
-	reader,writer,err:=os.Pipe()
-	if err!=nil {t.Fatal(err)}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer reader.Close()
-	if _,err:=writer.WriteString(`{"broker_config":"private-value"}`);err!=nil {t.Fatal(err)}
+	if _, err := writer.WriteString(`{"broker_config":"private-value"}`); err != nil {
+		t.Fatal(err)
+	}
 	writer.Close()
-	path:=fmt.Sprintf("/dev/fd/%d",reader.Fd())
-	args,cleanup,err:=prepareVars([]string{"gateway","broker","apps.identity","management","--vars-file",path,"--vars-file=deployment.yml"})
-	if err!=nil {t.Fatal(err)}
+	path := fmt.Sprintf("/dev/fd/%d", reader.Fd())
+	args, cleanup, err := prepareVars([]string{"gateway", "broker", "apps.identity", "management", "--vars-file", path, "--vars-file=deployment.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cleanup()
-	if args[5]==path||args[6]!="--vars-file=deployment.yml" {t.Fatalf("unexpected arguments: %v",args)}
-	data,err:=os.ReadFile(args[5]);if err!=nil||string(data)!=`{"broker_config":"private-value"}` {t.Fatalf("materialized vars: %v",err)}
-	info,err:=os.Stat(args[5]);if err!=nil||info.Mode().Perm()!=0600 {t.Fatal("vars file must be private")}
+	if args[5] == path || args[6] != "--vars-file=deployment.yml" {
+		t.Fatalf("unexpected arguments: %v", args)
+	}
+	data, err := os.ReadFile(args[5])
+	if err != nil || string(data) != `{"broker_config":"private-value"}` {
+		t.Fatalf("materialized vars: %v", err)
+	}
+	info, err := os.Stat(args[5])
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("vars file must be private")
+	}
 	cleanup()
-	if _,err:=os.Stat(args[5]);!os.IsNotExist(err) {t.Fatal("temporary vars not cleaned up")}
+	if _, err := os.Stat(args[5]); !os.IsNotExist(err) {
+		t.Fatal("temporary vars not cleaned up")
+	}
 }

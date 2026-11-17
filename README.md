@@ -21,18 +21,23 @@ Unbind preserves the key; deprovision revokes it.
 
 Use a foundation with an mTLS domain that enforces route policies (for example,
 `apps.identity`), a CLI supporting `add-route-policy` and `map-route --app-port`,
-and Python 3. After unpacking a release, or building and entering `cf/`:
+and the bundled Go deployment tools. No Python or Go runtime is required. After
+unpacking a release, or building and entering `cf/`:
 
-1. Copy `dev-vars.yml` to a private `local-vars.yml` and configure the app names,
-   routes, existing PostgreSQL service, provider models, plans and secrets. Set
-   `management_url` to `https://YOUR_MANAGEMENT_HOSTNAME.apps.identity` and
-   `management_trusted_ca` to an empty string when CF's mounted trust suffices,
-   or supply the management CA PEM.
+1. Copy `deployment.example.yml` to `local-vars.yml` for app names, routes, sizing
+   and the PostgreSQL binding. Copy `broker.example.yml` and `gateway.example.yml`
+   to private `broker.yml` and `gateway.yml` for application settings and secrets.
+   Set broker `gateway.management_url` to the intended HTTPS identity route.
 2. Target your org and space, then deploy:
 
-   ```sh
+   ```bash
+   set -e
    cf target -o YOUR_ORG -s YOUR_SPACE
-   python3 deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME --vars-file local-vars.yml
+   ./config-vars --check broker.yml gateway.yml
+   ./deploy YOUR_GATEWAY_APP YOUR_BROKER_APP apps.identity YOUR_MANAGEMENT_HOSTNAME \
+     --vars-file local-vars.yml \
+     --vars-file <(./config-vars broker_config broker.yml) \
+     --vars-file <(./config-vars gateway_config gateway.yml)
    ```
 
    The helper uploads both apps, maps management port 9090, configures the
@@ -82,7 +87,7 @@ To publish a release, run the **Release** GitHub Actions workflow on the default
 branch with a new stable version such as `v1.2.3`. It runs acceptance tests before
 creating the release, then attaches a single tested Linux AMD64 deployment
 tarball and its SHA-256 checksum. Unpack it and follow its README to configure
-the included manifest and deploy with `python3 deploy ...`. The checked-in `cf/dev-vars.yml`
+the included manifest and deploy with `./deploy ...`. The checked-in `cf/dev-vars.yml`
 contains the local lab's non-secret settings; `cf/local-secrets.yml` holds the
 lab's private values and is ignored by Git.
 

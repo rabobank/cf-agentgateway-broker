@@ -13,7 +13,7 @@ Branch: `feat/operator-config-multi-offerings`, based on `origin/master`
 
 ## Passed locally
 
-- Complete `scripts/test`, including Python converter tests/example reference
+- Complete `scripts/test`, including Go converter tests/example reference
   validation, Go race tests and vet for broker/config/launcher, PostgreSQL capsule
   contracts, capsule plugin suite and existing pinned-gateway integration suite.
 - Standalone compilation/execution of the new Rust `shared_mcp.rs` test with the
@@ -21,7 +21,15 @@ Branch: `feat/operator-config-multi-offerings`, based on `origin/master`
   generation-specific targets, shared credential rotation and incompatible/missing
   backend rejection.
 - Acceptance package compilation (`go test ./... -run '^$'`).
-- Python compilation and `git diff --check`.
+- Standalone Go deployment workflow contracts and `git diff --check`.
+
+## Standalone deployment tools
+
+`config-vars` and `deploy` are built from `src/cf-launcher/cmd/` and shipped as
+standalone Go executables. The Python converter/helper and PyYAML dependency have
+been removed. Red-test commits `5232c08` and `bcbd0da` establish conversion,
+cross-file validation, CF command ordering, route isolation and safe failure
+contracts before the Go implementations.
 
 ## Outstanding before deployment
 
