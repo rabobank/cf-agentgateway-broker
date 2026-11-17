@@ -159,6 +159,9 @@ func (e *environment) queryShared(sql string) string {
 var _ = Describe("consolidated shared MCP lifecycle", func() {
 	It("persists instance-selected principals and per-target evidence through restarts and revocation", func(ctx SpecContext) {
 		e := startSharedMCPEnvironment()
+		By("discovering file-owned backend definitions through the hybrid management API")
+		definitions := expectRequest(200, "GET", "http://127.0.0.1:9090/api/config/resources/mcp.backend", "", "", false)
+		Expect(string(definitions.body)).To(ContainSubstring(`"name":"shared"`))
 		path := e.brokerURL() + "/v2/service_instances/shared-instance"
 		provision := `{"service_id":"shared-mcp","plan_id":"shared-tools","parameters":{"client_1":"principal-one","client_2":"principal-two"}}`
 		bind := jsonString(map[string]any{"service_id": "shared-mcp", "plan_id": "shared-tools", "bind_resource": map[string]string{"app_guid": "app"}, "context": map[string]any{"platform": "cloudfoundry", "service_account": map[string]string{"issuer": sharedIssuer, "subject": sharedSubject}}})
