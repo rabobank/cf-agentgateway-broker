@@ -2,7 +2,6 @@
 # from converted broker.yml and gateway.yml, not this file.
 gateway_app_name: agentgateway
 broker_app_name: agentgateway-broker
-stack: cflinuxfs5
 buildpack: binary_buildpack
 gateway_memory: 768M
 gateway_disk_quota: 1G

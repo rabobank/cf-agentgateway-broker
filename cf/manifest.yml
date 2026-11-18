@@ -2,7 +2,6 @@
 applications:
 - name: ((gateway_app_name))
   path: dist/gateway
-  stack: ((stack))
   buildpacks: [((buildpack))]
   command: exec ./bin/launcher
   memory: ((gateway_memory))
@@ -23,7 +22,6 @@ applications:
     AGENTGATEWAY_CONFIG: ((gateway_config))
 - name: ((broker_app_name))
   path: dist/broker
-  stack: ((stack))
   buildpacks: [((buildpack))]
   command: exec ./bin/launcher
   memory: ((broker_memory))
