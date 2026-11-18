@@ -598,8 +598,8 @@ func (b *Broker) catalog(w http.ResponseWriter) {
 			plans := []any{}
 			for _, p := range s.Plans {
 				v := map[string]any{"id": p.ID, "name": p.Name, "description": p.Description, "free": p.Free}
-				if p.Schemas != nil {
-					v["schemas"] = p.Schemas
+				if len(p.Schemas) > 0 {
+					v["schemas"] = catalogParameterSchemas(p.Schemas)
 				}
 				if p.Budget != nil {
 					v["metadata"] = map[string]any{"models": p.Access.Models, "usd_allowance": p.Budget.USD, "window": p.Budget.Window, "accounting": "Post-response, epoch-aligned windows; concurrency and replica synchronization can overshoot. Unbind does not revoke the shared key."}

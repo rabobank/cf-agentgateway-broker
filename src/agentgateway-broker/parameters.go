@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 )
+
+const parameterSchemaDialect = "http://json-schema.org/draft-04/schema#"
 
 func validConnection(raw string) error {
 	u, e := url.Parse(raw)
@@ -22,6 +25,7 @@ type stringParameter struct {
 	Pattern     string `json:"pattern,omitempty"`
 }
 type instanceSchema struct {
+	Dialect              json.RawMessage            `json:"$schema"`
 	Type                 string                     `json:"type"`
 	AdditionalProperties *bool                      `json:"additionalProperties"`
 	Required             []string                   `json:"required"`
@@ -48,6 +52,12 @@ func parameterSchema(schemas map[string]any) (*instanceSchema, error) {
 	if err := strictJSON(envelope.Instance.Create.Parameters, &s); err != nil {
 		return nil, errors.New("unsupported instance schema")
 	}
+	if s.Dialect != nil {
+		var dialect string
+		if json.Unmarshal(s.Dialect, &dialect) != nil || dialect != parameterSchemaDialect {
+			return nil, errors.New("instance schema $schema must declare JSON Schema Draft 4")
+		}
+	}
 	if s.Type != "object" || s.AdditionalProperties == nil || *s.AdditionalProperties {
 		return nil, errors.New("instance schema must be object with additionalProperties false")
 	}
@@ -66,6 +76,19 @@ func parameterSchema(schemas map[string]any) (*instanceSchema, error) {
 	}
 	return &s, nil
 }
+
+// catalogParameterSchemas adds the required OSB declaration to a validated
+// schema without modifying the broker's shared configuration.
+func catalogParameterSchemas(schemas map[string]any) map[string]any {
+	instance := schemas["service_instance"].(map[string]any)
+	create := instance["create"].(map[string]any)
+	parameters := maps.Clone(create["parameters"].(map[string]any))
+	parameters["$schema"] = parameterSchemaDialect
+	return map[string]any{"service_instance": map[string]any{
+		"create": map[string]any{"parameters": parameters},
+	}}
+}
+
 func validateParameters(schemas map[string]any, params map[string]any) (map[string]string, error) {
 	s, err := parameterSchema(schemas)
 	if err != nil {
