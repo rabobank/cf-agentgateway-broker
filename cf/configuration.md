@@ -18,8 +18,11 @@ the shared installation/log identity.
 repeat between services; plan IDs are globally unique. LLM plans have
 `access.models` and `budget: {usd: 10, window: 24h}`. MCP plans have
 `access.backends` and optional standard OSB
-`schemas.service_instance.create.parameters`. Supported parameter schemas are
-objects with `additionalProperties: false`, `required`, and named string
+`schemas.service_instance.create.parameters`. Cloud Foundry requires a
+`$schema` declaration on each published parameter schema. The broker always
+publishes `http://json-schema.org/draft-04/schema#`; `broker.yml` may omit
+`$schema` or specify that exact URI. Supported parameter schemas are objects
+with `additionalProperties: false`, `required`, and named string
 properties (`type`, `description`, `pattern`). Unsupported constraints fail
 configuration validation. Binding parameters cannot change upstream identity.
 

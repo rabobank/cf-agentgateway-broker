@@ -13,6 +13,44 @@ func configureInferencePlans(t *testing.T, b *Broker, plans string) {
 	}
 }
 
+func TestCatalogPublishesDraft4ParameterSchema(t *testing.T) {
+	for _, tc := range []struct{ name, declaration string }{
+		{"implicit", ""},
+		{"explicit", `"$schema":"http://json-schema.org/draft-04/schema#",`},
+		{"unsupported", `"$schema":"http://json-schema.org/draft-07/schema#",`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{Listen: ":8080", Username: "broker", Password: "secret", Installation: "test", ManagementURL: "https://management.test"}
+			const constraints = `"type":"object","additionalProperties":false,"required":["client_id"],"properties":{"client_id":{"type":"string","pattern":"^[a-z-]+$"}}`
+			if err := json.Unmarshal([]byte(`[{"id":"tools","name":"tools","description":"Tools","protocol":"mcp","connection":{"url":"https://tools.test/mcp"},"plans":[{"id":"work","name":"standard","description":"Work","access":{"backends":["devops"]},"schemas":{"service_instance":{"create":{"parameters":{`+tc.declaration+constraints+`}}}}}]}]`), &cfg.Services); err != nil {
+				t.Fatal(err)
+			}
+			b, err := newBroker(cfg)
+			if tc.name == "unsupported" {
+				if err == nil || !strings.Contains(err.Error(), "$schema") {
+					t.Fatalf("expected an unsupported dialect error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := call(b, "GET", "/v2/catalog", "")
+			// encoding/json emits map keys in sorted order.
+			const want = `"parameters":{"$schema":"http://json-schema.org/draft-04/schema#","additionalProperties":false,"properties":{"client_id":{"pattern":"^[a-z-]+$","type":"string"}},"required":["client_id"],"type":"object"}`
+			if w.Code != 200 || !strings.Contains(w.Body.String(), want) {
+				t.Fatalf("unexpected catalog: %d %s", w.Code, w.Body)
+			}
+			if tc.declaration == "" {
+				raw, err := json.Marshal(cfg.Services[0].Plans[0].Schemas)
+				if err != nil || strings.Contains(string(raw), `"$schema"`) {
+					t.Fatalf("catalog changed configured schema: %s (%v)", raw, err)
+				}
+			}
+		})
+	}
+}
+
 func TestOperatorConfiguredInferenceCatalogAndLifecycle(t *testing.T) {
 	b, resources := fixture(t)
 	configureInferencePlans(t, b, `[

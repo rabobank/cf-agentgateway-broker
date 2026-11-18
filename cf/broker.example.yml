@@ -60,6 +60,7 @@ services:
           service_instance:
             create:
               parameters:
+                $schema: 'http://json-schema.org/draft-04/schema#'
                 type: object
                 additionalProperties: false
                 required: [client_id]
