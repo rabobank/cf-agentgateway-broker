@@ -90,6 +90,9 @@ func TestSharedMCPInstanceIdentityRecoveryAndOrphanCleanup(t *testing.T) {
 		case "GET":
 			list := []any{}
 			for id, v := range resources[kind] {
+				if len(parts) == 2 && parts[1] != id {
+					continue
+				}
 				list = append(list, map[string]any{"id": id, "value": v})
 			}
 			write(w, 200, map[string]any{"resources": list})
@@ -191,8 +194,10 @@ func TestTeamOAuthBindingRecoverableAndUnique(t *testing.T) {
 		switch r.Method {
 		case "GET":
 			var list []any
-			for id, value := range resources[kind] {
-				list = append(list, map[string]any{"id": id, "value": value})
+			for resourceID, value := range resources[kind] {
+				if id == "" || resourceID == id {
+					list = append(list, map[string]any{"id": resourceID, "value": value})
+				}
 			}
 			write(w, 200, map[string]any{"resources": list})
 		case "PUT":

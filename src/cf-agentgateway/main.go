@@ -72,7 +72,8 @@ func run(cf plugin.CliConnection, args []string) error {
 	}
 	q := url.Values{"space_guids": {space.Guid}, "type": {"managed"}}
 	if action != "list" {
-		q.Set("names", args[1])
+		// CAPI splits array filters on commas before URI-unescaping each item.
+		q.Set("names", strings.ReplaceAll(url.QueryEscape(args[1]), "+", "%20"))
 	}
 	var instances []instance
 	for path := "/v3/service_instances?" + q.Encode(); path != ""; {
@@ -93,8 +94,8 @@ func run(cf plugin.CliConnection, args []string) error {
 			path = u.RequestURI()
 		}
 	}
-	if action != "list" && len(instances) != 1 {
-		return errors.New("expected one managed instance in the targeted space")
+	if action != "list" && (len(instances) != 1 || instances[0].Name != args[1]) {
+		return errors.New("expected one exactly matching managed instance in the targeted space")
 	}
 	for _, i := range instances {
 		plan := i.Relationships.ServicePlan.Data.GUID

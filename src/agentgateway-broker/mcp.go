@@ -49,7 +49,7 @@ func (b *Broker) managed(ctx context.Context, kind, id string) (json.RawMessage,
 	var list struct {
 		Resources []managedResource `json:"resources"`
 	}
-	if err := b.management(ctx, http.MethodGet, kind, "", nil, &list); err != nil {
+	if err := b.management(ctx, http.MethodGet, kind, "/"+url.PathEscape(id), nil, &list); err != nil {
 		return nil, err
 	}
 	for _, v := range list.Resources {
