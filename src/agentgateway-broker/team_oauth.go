@@ -18,7 +18,10 @@ type teamOAuthBroker struct {
 }
 
 func (c teamOAuthBroker) key() []byte {
-	key, _ := hex.DecodeString(c.BindingKey)
+	key, err := hex.DecodeString(c.BindingKey)
+	if err != nil {
+		return nil
+	}
 	return key
 }
 

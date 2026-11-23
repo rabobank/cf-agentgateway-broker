@@ -153,6 +153,20 @@ func TestSharedMCPInstanceIdentityRecoveryAndOrphanCleanup(t *testing.T) {
 	}
 }
 
+func TestTeamOAuthRejectsBindingKeyWithInvalidSuffix(t *testing.T) {
+	b, _ := fixture(t)
+	key := strings.Repeat("12", 32)
+	for _, suffix := range []string{"a", "zz"} {
+		t.Run(suffix, func(t *testing.T) {
+			cfg := b.cfg
+			cfg.TeamOAuth = &teamOAuthBroker{BindingKey: key + suffix}
+			if _, err := newBroker(cfg); err == nil || !strings.Contains(err.Error(), "32-byte hexadecimal binding key") {
+				t.Fatalf("expected malformed binding key to prevent startup; got %v", err)
+			}
+		})
+	}
+}
+
 func TestTeamOAuthBindingRecoverableAndUnique(t *testing.T) {
 	b, _ := fixture(t)
 	raw := `{"service_id":"","inference_plans":[],"team_oauth":{"binding_key":"` + strings.Repeat("12", 32) + `"},"services":[{"id":"tools","name":"tools","description":"Tools","protocol":"mcp","connection":{"url":"https://gateway.test/mcp"},"plans":[{"id":"reader","name":"reader","description":"Read","access":{"backends":["design"]}}]}]}`
