@@ -34,7 +34,6 @@ type oauthBackend struct {
 }
 
 type teamDashboard struct {
-	config   mcpconfig.OAuthDashboard
 	logID    string
 	aead     cipher.AEAD
 	client   *http.Client
@@ -71,27 +70,13 @@ type upstreamSecret struct {
 }
 
 func newTeamDashboard(cfg mcpconfig.GatewayOperator) (*teamDashboard, error) {
-	if cfg.MCP.OAuthDashboard == nil && cfg.MCP.OAuthUpdates == nil {
+	if cfg.MCP.OAuthUpdates == nil {
 		return nil, nil
 	}
-	var c mcpconfig.OAuthDashboard
-	if cfg.MCP.OAuthUpdates != nil {
-		if err := cfg.MCP.OAuthUpdates.Validate(); err != nil {
-			return nil, err
-		}
-		if cfg.MCP.OAuthDashboard != nil {
-			return nil, errors.New("configure only one team OAuth connection interface")
-		}
-		c.Key = cfg.MCP.OAuthUpdates.StorageKey
-	} else {
-		c = *cfg.MCP.OAuthDashboard
-		if err := c.Validate(); err != nil {
-			return nil, err
-		}
+	if err := cfg.MCP.OAuthUpdates.Validate(); err != nil {
+		return nil, err
 	}
-	c.PublicURL = strings.TrimRight(c.PublicURL, "/")
-	c.CFAPI = strings.TrimRight(c.CFAPI, "/")
-	key, _ := hex.DecodeString(c.Key)
+	key, _ := hex.DecodeString(cfg.MCP.OAuthUpdates.StorageKey)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -100,11 +85,11 @@ func newTeamDashboard(cfg mcpconfig.GatewayOperator) (*teamDashboard, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &teamDashboard{config: c, logID: cfg.Capsules.LogID, aead: aead, admin: "http://127.0.0.1:15000",
+	d := &teamDashboard{logID: cfg.Capsules.LogID, aead: aead, admin: "http://127.0.0.1:15000",
 		client:   &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		backends: map[string]oauthBackend{}, updates: cfg.MCP.OAuthUpdates}
 	if !mcpconfig.ValidID(d.logID) {
-		return nil, errors.New("OAuth dashboard requires a valid installation log ID")
+		return nil, errors.New("team OAuth requires a valid installation log ID")
 	}
 	for _, backend := range cfg.MCP.Backends {
 		if backend.TeamOAuth == nil {
@@ -148,14 +133,8 @@ func runTeamOAuth(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/authorize", d.authorize)
 	mux.HandleFunc("/upstream/{backend}", d.upstream)
-	if d.updates != nil {
-		mux.HandleFunc("GET /internal/mcp-oauth/{instance}", d.connectionStatus)
-		mux.HandleFunc("PATCH /internal/mcp-oauth/{instance}", d.updateConnection)
-	} else {
-		mux.HandleFunc("GET /mcp-connections/callback", d.loginCallback)
-		mux.HandleFunc("GET /mcp-connections/{instance}", d.dashboard)
-		mux.HandleFunc("POST /mcp-connections/{instance}", d.changeConnection)
-	}
+	mux.HandleFunc("GET /internal/mcp-oauth/{instance}", d.connectionStatus)
+	mux.HandleFunc("PATCH /internal/mcp-oauth/{instance}", d.updateConnection)
 	listener, err := net.Listen("tcp", "127.0.0.1:50053")
 	if err != nil {
 		return err

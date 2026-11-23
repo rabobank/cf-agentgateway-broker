@@ -90,7 +90,7 @@ func (c Config) validateOfferings() error {
 			if strings.TrimSpace(p.Description) == "" {
 				return errors.New("plan description required")
 			}
-			if p.OAuthProfile != nil && (s.Protocol != "mcp" || p.OAuthProfile.Validate() != nil || len(p.Access.Backends) != 1 || len(p.Schemas) != 0 || c.TeamOAuth == nil || c.TeamOAuth.DashboardURL != "") {
+			if p.OAuthProfile != nil && (s.Protocol != "mcp" || p.OAuthProfile.Validate() != nil || len(p.Access.Backends) != 1 || len(p.Schemas) != 0 || c.TeamOAuth == nil) {
 				return errors.New("OAuth profile requires a team MCP plan, one backend, and CLI connection mode")
 			}
 			switch s.Protocol {

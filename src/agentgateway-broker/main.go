@@ -118,8 +118,8 @@ var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func (c Config) validate() error {
 	if c.TeamOAuth != nil {
-		if (c.TeamOAuth.DashboardURL != "" && !mcpconfig.OAuthOrigin(c.TeamOAuth.DashboardURL)) || len(c.TeamOAuth.key()) != 32 {
-			return errors.New("team_oauth requires a 32-byte hexadecimal binding key and an HTTPS origin if a dashboard is configured")
+		if len(c.TeamOAuth.key()) != 32 {
+			return errors.New("team_oauth requires a 32-byte hexadecimal binding key")
 		}
 	}
 	if err := mcpconfig.Validate(c.MCPServers); err != nil {

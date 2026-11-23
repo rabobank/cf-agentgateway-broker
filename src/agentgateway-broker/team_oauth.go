@@ -14,8 +14,7 @@ import (
 )
 
 type teamOAuthBroker struct {
-	DashboardURL string `json:"dashboard_url"`
-	BindingKey   string `json:"binding_key"`
+	BindingKey string `json:"binding_key"`
 }
 
 func (c teamOAuthBroker) key() []byte {
@@ -29,13 +28,6 @@ func (c teamOAuthBroker) bearer(binding mcpconfig.Binding) (string, string) {
 	token := hex.EncodeToString(mac.Sum(nil))
 	hash := sha256.Sum256([]byte(token))
 	return token, hex.EncodeToString(hash[:])
-}
-
-func (b *Broker) provisionResult(instance *mcpconfig.Instance) map[string]any {
-	if instance.Backend.Auth.Method == mcpconfig.TeamOAuthMethod && b.cfg.TeamOAuth != nil && b.cfg.TeamOAuth.DashboardURL != "" {
-		return map[string]any{"dashboard_url": strings.TrimRight(b.cfg.TeamOAuth.DashboardURL, "/") + "/mcp-connections/" + managedID(b.cfg.Installation, instance.ID, "")}
-	}
-	return map[string]any{}
 }
 
 func (b *Broker) oauthManagement(ctx context.Context, method, instance string, body any, out any) error {

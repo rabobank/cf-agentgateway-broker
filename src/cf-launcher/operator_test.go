@@ -50,7 +50,8 @@ func TestOperatorGatewayValidatesUnusedMCPTemplates(t *testing.T) {
 
 func TestTeamOAuthOperatorWiresOnlyExplicitToolsAndLoopbackProxy(t *testing.T) {
 	t.Setenv("VCAP_SERVICES", `{"postgres":[{"name":"state","credentials":{"uri":"postgres://db/gateway"}}]}`)
-	raw := `{"database":{"service_name":"state"},"mcp":{"session_key":"` + strings.Repeat("12", 32) + `","oauth_dashboard":{"public_url":"https://dashboard.test","cf_api":"https://cf.test","encryption_key":"` + strings.Repeat("34", 32) + `","login":{"authorization_url":"https://uaa.test/oauth/authorize","token_url":"https://uaa.test/oauth/token","client_id":"dashboard","client_secret":"keep-out-of-native-config","client_auth":"client_secret_basic","scopes":["cloud_controller_service_permissions.read"]}},"backends":[{"name":"design","revision":"v1","team_oauth":{"allowed_tools":["get_metadata"]},"mcp":{"targets":[{"name":"tools","mcp":{"host":"https://mcp.test/mcp"}}]}}]}}`
+	privateKey, storageKey := strings.Repeat("23", 32), strings.Repeat("34", 32)
+	raw := `{"database":{"service_name":"state"},"mcp":{"session_key":"` + strings.Repeat("12", 32) + `","oauth_updates":{"private_key":"` + privateKey + `","encryption_key":"` + storageKey + `"},"backends":[{"name":"design","revision":"v1","team_oauth":{"allowed_tools":["get_metadata"]},"mcp":{"targets":[{"name":"tools","mcp":{"host":"https://mcp.test/mcp"}}]}}]}}`
 	cfg, err := operatorGateway([]byte(raw), 8123)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +62,7 @@ func TestTeamOAuthOperatorWiresOnlyExplicitToolsAndLoopbackProxy(t *testing.T) {
 			t.Errorf("missing %s", expected)
 		}
 	}
-	if strings.Contains(string(data), "keep-out-of-native-config") || strings.Contains(string(data), "https://mcp.test") {
+	if strings.Contains(string(data), privateKey) || strings.Contains(string(data), storageKey) {
 		t.Fatal("operator OAuth configuration leaked into native routing")
 	}
 	for _, replacement := range []string{`"allowed_tools":[]`, `"allowed_tools":["*"]`} {

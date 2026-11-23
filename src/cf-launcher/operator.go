@@ -38,24 +38,9 @@ func operatorGateway(raw []byte, port int) (map[string]any, error) {
 		if e != nil || len(key) != 32 {
 			return nil, errors.New("mcp.session_key must be 32-byte hexadecimal")
 		}
-		if c.MCP.OAuthDashboard != nil {
-			if err := c.MCP.OAuthDashboard.Validate(); err != nil {
-				return nil, err
-			}
-			public := strings.TrimRight(c.MCP.OAuthDashboard.PublicURL, "/")
-			u, _ := url.Parse(public)
-			config["routes"] = []any{map[string]any{
-				"name": "mcp-oauth-dashboard", "gateways": []string{"inference"}, "hostnames": []string{u.Hostname()},
-				"matches":  []any{map[string]any{"path": map[string]any{"pathPrefix": "/mcp-connections/"}}},
-				"backends": []any{map[string]any{"host": "127.0.0.1:50053"}},
-			}}
-		}
 		if c.MCP.OAuthUpdates != nil {
 			if err := c.MCP.OAuthUpdates.Validate(); err != nil {
 				return nil, err
-			}
-			if c.MCP.OAuthDashboard != nil {
-				return nil, errors.New("configure only one team OAuth connection interface")
 			}
 			config["routes"] = []any{map[string]any{
 				"name": "mcp-oauth-management", "gateways": []string{"management"},
@@ -88,7 +73,7 @@ func operatorGateway(raw []byte, port int) (map[string]any, error) {
 			}
 			seen[b.Name] = true
 			if b.TeamOAuth != nil {
-				if (c.MCP.OAuthDashboard == nil && c.MCP.OAuthUpdates == nil) || len(b.MCP.Targets) != 1 {
+				if c.MCP.OAuthUpdates == nil || len(b.MCP.Targets) != 1 {
 					return nil, errors.New("team OAuth requires an enabled connection interface and one target")
 				}
 				if err := b.TeamOAuth.Validate(); err != nil {

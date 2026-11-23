@@ -15,8 +15,7 @@
    `issuer`, `client_id`, `scopes`, the matching X25519 `public_key` (hex raw
    bytes), and optional `callback_port`. Use a separate binding key across all
    replicas of the same broker installation. Refresh the CF broker catalog
-   after changing public profile metadata. Do not configure `dashboard_url`
-   or `oauth_dashboard` for CLI mode.
+   after changing public profile metadata.
 4. Install `dist/cf-agentgateway` from the build. After targeting the desired
    space, run `cf ag list`, `cf ag connect INSTANCE`, `cf ag status INSTANCE`,
    or `cf ag disconnect INSTANCE`. To replace a working token, use `cf ag
@@ -40,57 +39,16 @@ broker, Agentgateway, and PostgreSQL. There is no live SaaS login or full CF
 deployment. CI requires the CF CLI; locally the plugin spec is skipped if `cf`
 is missing.
 
-## Optional browser token-import pilot
+## Figma and agent bindings
 
-A team service instance shares one upstream OAuth access token across its app
-bindings. Each binding gets its own Agentgateway bearer in `credentials.headers`
-and only its verifier is saved on the gateway grant. The gateway-side dashboard
-uses CF OAuth and checks live CAPI `manage` permission for the service instance
-before it shows or changes the connection. OAuth access tokens are encrypted in
-gateway-managed configuration; the broker and agents never receive them.
+Use the hosted resource `https://mcp.figma.com/mcp`, an approved client, and
+the `mcp:connect` scope. See the [Figma hosted setup guide](https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/).
+Start the tool allowlist with `get_metadata` and `get_screenshot`.
 
-## Configure the pilot
-
-1. Register a confidential CF UAA client for the dashboard. Allow authorization
-   code with PKCE and `cloud_controller_service_permissions.read`. Register the
-   exact redirect `https://<gateway-host>/mcp-connections/callback`. Configure
-   the public origin to match a route mapped to the gateway CF app.
-2. In `gateway.yml`, add `mcp.oauth_dashboard` with `public_url`, `cf_api`, a
-   random 32-byte hex `encryption_key`, and `login` with `authorization_url`,
-   `token_url`, `client_id`, `client_secret`, `client_auth`
-   (`client_secret_basic` or `client_secret_post`), and `scopes`. Only set
-   `issuer` if UAA sends the corresponding `iss` authorization response field.
-   Use the same encryption key across replicas, separately from the MCP session
-   key. Treat operator config containing secrets as private.
-3. Add an MCP backend with a stable `name`, `revision`, exactly one
-   `mcp.targets` entry containing only `name` and `mcp.host`, and
-   `team_oauth.allowed_tools` containing explicit upstream tool names. For
-   Figma, the endpoint is `https://mcp.figma.com/mcp`; a narrow starting list is
-   `get_metadata` and `get_screenshot`. Audit upstream tool semantics before
-   adding tools and increment the backend revision on incompatible changes.
-4. In `broker.yml`, set `team_oauth.dashboard_url` to the same public origin and
-   `team_oauth.binding_key` to a separate random 32-byte hex secret shared by
-   broker replicas. Publish an MCP plan referencing just this backend, with no
-   identity parameters. Provision an instance and bind the team agent's CF app.
-5. Configure the MCP client with the binding's `mcp_url` and `headers`, keeping
-   the bearer out of prompts and shared workspace files. The T3 buildpack's
-   automatic MCP binding consumption is separate from this release.
-
-## Import a token
-
-Use a Figma-approved OAuth client and obtain an access token for the hosted MCP
-resource with `mcp:connect`. Reuse an existing local client if its integration
-supports exporting an MCP access token for this use. The Figma desktop MCP
-server at `127.0.0.1` does not itself issue hosted MCP tokens. The registration
-endpoint does not imply arbitrary clients are approved; see the
-[Figma hosted setup guide](https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/).
-
-Open the OSB dashboard URL, sign in with UAA, and import the access token and
-its expiry (RFC 3339, at most 24 hours ahead). Importing does not refresh or
-validate the token with Figma; the first MCP call verifies it upstream. Import
-a replacement when the token expires. Disconnect removes its use by this
-gateway instance; it does not revoke the token at the provider. A replaced
-connection invalidates previous upstream MCP session IDs.
+Bind the team agent's CF app and configure its MCP client with the binding's
+`mcp_url` and `headers`. Disconnect disables the gateway connection; it does
+not revoke the token at Figma. Replacing the authorization invalidates previous
+upstream MCP session IDs.
 
 Only files suitable for all team members should be accessible to the connected
 identity. A read-tool allowlist constrains operations, not file visibility.

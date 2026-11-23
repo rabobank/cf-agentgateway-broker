@@ -72,11 +72,10 @@ type GatewayOperator struct {
 	} `json:"llm"`
 	ModelCatalog json.RawMessage `json:"model_catalog"`
 	MCP          struct {
-		SessionKey     string          `json:"session_key"`
-		CallerAuth     CallerAuth      `json:"caller_auth"`
-		Backends       []SharedBackend `json:"backends"`
-		OAuthDashboard *OAuthDashboard `json:"oauth_dashboard,omitempty"`
-		OAuthUpdates   *OAuthUpdates   `json:"oauth_updates,omitempty"`
+		SessionKey   string          `json:"session_key"`
+		CallerAuth   CallerAuth      `json:"caller_auth"`
+		Backends     []SharedBackend `json:"backends"`
+		OAuthUpdates *OAuthUpdates   `json:"oauth_updates,omitempty"`
 	} `json:"mcp"`
 	Capsules CapsuleOperator `json:"capsules"`
 }

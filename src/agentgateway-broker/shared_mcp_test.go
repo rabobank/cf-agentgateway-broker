@@ -155,7 +155,7 @@ func TestSharedMCPInstanceIdentityRecoveryAndOrphanCleanup(t *testing.T) {
 
 func TestTeamOAuthBindingRecoverableAndUnique(t *testing.T) {
 	b, _ := fixture(t)
-	raw := `{"service_id":"","inference_plans":[],"team_oauth":{"dashboard_url":"https://dashboard.test","binding_key":"` + strings.Repeat("12", 32) + `"},"services":[{"id":"tools","name":"tools","description":"Tools","protocol":"mcp","connection":{"url":"https://gateway.test/mcp"},"plans":[{"id":"reader","name":"reader","description":"Read","access":{"backends":["design"]}}]}]}`
+	raw := `{"service_id":"","inference_plans":[],"team_oauth":{"binding_key":"` + strings.Repeat("12", 32) + `"},"services":[{"id":"tools","name":"tools","description":"Tools","protocol":"mcp","connection":{"url":"https://gateway.test/mcp"},"plans":[{"id":"reader","name":"reader","description":"Read","access":{"backends":["design"]}}]}]}`
 	if err := json.Unmarshal([]byte(raw), &b.cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -213,15 +213,15 @@ func TestTeamOAuthBindingRecoverableAndUnique(t *testing.T) {
 	const path = "/v2/service_instances/team"
 	const provision = `{"service_id":"tools","plan_id":"reader"}`
 	first := call(b, "PUT", path, provision)
-	if first.Code != 201 || !strings.Contains(first.Body.String(), `"dashboard_url":"https://dashboard.test/mcp-connections/`) {
-		t.Fatalf("expected a service dashboard, got %d: %s", first.Code, first.Body)
+	if first.Code != 201 {
+		t.Fatalf("provision: %d %s", first.Code, first.Body)
 	}
 	other, err := newBroker(b.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if again := call(other, "PUT", path, provision); again.Code != 200 || again.Body.String() != first.Body.String() {
-		t.Fatal("provision retry lost the dashboard URL")
+		t.Fatal("provision retry did not return the same response")
 	}
 	const bind = `{"service_id":"tools","plan_id":"reader","bind_resource":{"app_guid":"agent"},"context":{"platform":"cloudfoundry"}}`
 	const bindingPath = path + "/service_bindings/"
