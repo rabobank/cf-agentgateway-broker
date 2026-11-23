@@ -106,6 +106,13 @@ func startSharedMCPFixture(work string) *sharedMCPFixture {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 	}))
+	startFixtureTLS(server, work, key)
+	f.url = server.URL
+	return f
+}
+
+func startFixtureTLS(server *httptest.Server, work string, key *rsa.PrivateKey) {
+	GinkgoHelper()
 	// Use a real CA-issued server chain. httptest's default certificate is a
 	// self-signed leaf, not a CA suitable for the gateway's native root loader.
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -127,11 +134,9 @@ func startSharedMCPFixture(work string) *sharedMCPFixture {
 	_, err = leafCert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "127.0.0.1"})
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(server.Close)
-	f.url = server.URL
 	// This public CA must be readable by the runtime image's unprivileged user,
 	// whose UID differs from the host runner. It contains no private key.
 	Expect(os.WriteFile(filepath.Join(work, "fixture-ca.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0644)).To(Succeed())
-	return f
 }
 
 func (f *sharedMCPFixture) gatewayConfig() map[string]any {

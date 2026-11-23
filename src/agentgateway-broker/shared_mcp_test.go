@@ -152,3 +152,112 @@ func TestSharedMCPInstanceIdentityRecoveryAndOrphanCleanup(t *testing.T) {
 		t.Fatalf("deprovision: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestTeamOAuthBindingRecoverableAndUnique(t *testing.T) {
+	b, _ := fixture(t)
+	raw := `{"service_id":"","inference_plans":[],"team_oauth":{"dashboard_url":"https://dashboard.test","binding_key":"` + strings.Repeat("12", 32) + `"},"services":[{"id":"tools","name":"tools","description":"Tools","protocol":"mcp","connection":{"url":"https://gateway.test/mcp"},"plans":[{"id":"reader","name":"reader","description":"Read","access":{"backends":["design"]}}]}]}`
+	if err := json.Unmarshal([]byte(raw), &b.cfg); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	resources := map[string]map[string]json.RawMessage{}
+	revoked := map[string]bool{}
+	lost := false
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		kind, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/api/config/resources/"), "/")
+		if kind == "mcp.backend" {
+			w.Write([]byte(`{"resources":[{"id":"design","value":{"name":"design","revision":"v1","teamOAuth":true,"targets":[{"name":"reader"}]}}]}`))
+			return
+		}
+		if resources[kind] == nil {
+			resources[kind] = map[string]json.RawMessage{}
+		}
+		switch r.Method {
+		case "GET":
+			var list []any
+			for id, value := range resources[kind] {
+				list = append(list, map[string]any{"id": id, "value": value})
+			}
+			write(w, 200, map[string]any{"resources": list})
+		case "PUT":
+			var body struct {
+				Resources []struct{ Value json.RawMessage }
+			}
+			var value struct{ Name string }
+			if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.Resources) != 1 || json.Unmarshal(body.Resources[0].Value, &value) != nil {
+				w.WriteHeader(400)
+				return
+			}
+			if revoked[value.Name] {
+				w.WriteHeader(409)
+				return
+			}
+			resources[kind][value.Name] = body.Resources[0].Value
+			if lost && kind == "mcp.grant" {
+				lost = false
+				conn, _, _ := w.(http.Hijacker).Hijack()
+				conn.Close()
+				return
+			}
+			write(w, 200, map[string]any{})
+		case "DELETE":
+			revoked[id] = true
+			delete(resources[kind], id)
+			w.WriteHeader(200)
+		}
+	}))
+	defer s.Close()
+	b.cfg.ManagementURL = s.URL
+	const path = "/v2/service_instances/team"
+	const provision = `{"service_id":"tools","plan_id":"reader"}`
+	first := call(b, "PUT", path, provision)
+	if first.Code != 201 || !strings.Contains(first.Body.String(), `"dashboard_url":"https://dashboard.test/mcp-connections/`) {
+		t.Fatalf("expected a service dashboard, got %d: %s", first.Code, first.Body)
+	}
+	other, err := newBroker(b.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := call(other, "PUT", path, provision); again.Code != 200 || again.Body.String() != first.Body.String() {
+		t.Fatal("provision retry lost the dashboard URL")
+	}
+	const bind = `{"service_id":"tools","plan_id":"reader","bind_resource":{"app_guid":"agent"},"context":{"platform":"cloudfoundry"}}`
+	const bindingPath = path + "/service_bindings/"
+	mu.Lock()
+	lost = true
+	mu.Unlock()
+	if w := call(b, "PUT", bindingPath+"first", bind); w.Code != 503 {
+		t.Fatal("expected uncertain write")
+	}
+	credential := func(b *Broker, id string) string {
+		t.Helper()
+		var result struct {
+			Credentials struct{ Headers map[string]string }
+		}
+		w := call(b, "PUT", bindingPath+id, bind)
+		if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Credentials.Headers["Authorization"]) != 71 {
+			t.Fatalf("missing binding credential, HTTP %d", w.Code)
+		}
+		return result.Credentials.Headers["Authorization"]
+	}
+	firstKey := credential(other, "first")
+	if credential(b, "first") != firstKey || credential(other, "second") == firstKey {
+		t.Fatal("binding credentials are not stable and distinct")
+	}
+	mu.Lock()
+	durable := string(resources["mcp.grant"][managedID(b.cfg.Installation, "team", "first")])
+	mu.Unlock()
+	if strings.Contains(durable, strings.TrimPrefix(firstKey, "Bearer ")) || !strings.Contains(durable, "bearer_hash") {
+		t.Fatal("expected a persisted verifier only")
+	}
+	for _, id := range []string{"first", "orphan"} {
+		if w := call(other, "DELETE", bindingPath+id+"?service_id=tools&plan_id=reader", ""); w.Code != 200 {
+			t.Fatal("orphan cleanup failed")
+		}
+		if w := call(b, "PUT", bindingPath+id, bind); w.Code != 503 && w.Code != 409 {
+			t.Fatal("orphan binding resurrected")
+		}
+	}
+}

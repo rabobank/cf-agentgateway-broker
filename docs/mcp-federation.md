@@ -1,5 +1,8 @@
 # MCP service plans and federated backend authentication
 
+For shared hosted OAuth connections with per-binding credentials and a tool
+allowlist, see [the team OAuth pilot](mcp-team-oauth.md).
+
 ## Consolidated configuration
 
 The new CF manifest uses `broker.yml` and `gateway.yml`, converted to per-app

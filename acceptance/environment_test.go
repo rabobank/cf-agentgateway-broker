@@ -41,6 +41,7 @@ type environment struct {
 	mcpURL         string
 	operatorConfig bool
 	sharedMCP      *sharedMCPFixture
+	oauthMCP       *oauthPKCEFixture
 	containers     map[string]string
 }
 
@@ -57,6 +58,10 @@ func startSharedMCPEnvironment() *environment {
 }
 
 func startEnvironmentWithMCP(operator, shared bool) *environment {
+	return startEnvironmentWithFixtures(operator, shared, false)
+}
+
+func startEnvironmentWithFixtures(operator, shared, oauth bool) *environment {
 	GinkgoHelper()
 	root, err := filepath.Abs("..")
 	Expect(err).NotTo(HaveOccurred())
@@ -71,6 +76,9 @@ func startEnvironmentWithMCP(operator, shared bool) *environment {
 	e := &environment{root: root, work: work, operatorConfig: operator, containers: map[string]string{}}
 	if shared {
 		e.sharedMCP = startSharedMCPFixture(work)
+	}
+	if oauth {
+		e.oauthMCP = startOAuthPKCEFixture(work)
 	}
 	e.startPostgres()
 	e.startProvider()
@@ -164,7 +172,7 @@ func (e *environment) startContainer(role string, env map[string]string) {
 	name := fmt.Sprintf("agentgateway-acceptance-%s-%d", role, time.Now().UnixNano())
 	e.containers[role] = name
 	args := []string{"run", "--name", name, "--network", "host", "--tmpfs", "/app:exec,mode=777", "--workdir", "/app"}
-	if e.sharedMCP != nil && role == "gateway" {
+	if (e.sharedMCP != nil || e.oauthMCP != nil) && role == "gateway" {
 		args = append(args, "--mount", fmt.Sprintf("type=bind,src=%s,dst=/fixture-ca.pem,readonly", filepath.Join(e.work, "fixture-ca.pem")), "--env", "SSL_CERT_FILE=/fixture-ca.pem")
 	}
 	args = append(args, "--mount", fmt.Sprintf("type=bind,src=%s,dst=/app/bin,readonly", filepath.Join(e.root, "cf/dist", role, "bin")))
@@ -176,6 +184,9 @@ func (e *environment) startContainer(role string, env map[string]string) {
 	}
 	if role == "gateway" {
 		command := "./bin/capsule-extmcp & exec ./bin/launcher"
+		if e.oauthMCP != nil {
+			command = "./bin/capsule-extmcp mcp-oauth & " + command
+		}
 		if e.sharedMCP != nil {
 			command = "test -r /fixture-ca.pem || exit 1; " + command
 		}
@@ -216,6 +227,9 @@ func (e *environment) startGateway() {
 		if e.sharedMCP != nil {
 			config["mcp"] = e.sharedMCP.gatewayConfig()
 		}
+		if e.oauthMCP != nil {
+			config["mcp"] = e.oauthMCP.gatewayConfig()
+		}
 		e.startContainer("gateway", map[string]string{"APP_ROLE": "gateway", "PORT": strconv.Itoa(e.gatewayPort), "RUST_MIN_STACK": "16777216", "VCAP_SERVICES": jsonString(map[string]any{"postgres": []any{map[string]any{"name": "acceptance-state", "credentials": map[string]string{"uri": uri}}}}), "AGENTGATEWAY_CONFIG": jsonString(config)})
 		Eventually(func() int { return status(http.MethodGet, "http://127.0.0.1:9090/api/runtime", "", "", false) }).WithTimeout(90 * time.Second).Should(Equal(http.StatusOK))
 		return
@@ -244,7 +258,12 @@ func (e *environment) startBroker() {
 		if e.sharedMCP != nil {
 			services = append(services, sharedMCPOffering(e.gatewayPort))
 		}
-		e.startContainer("broker", map[string]string{"APP_ROLE": "broker", "PORT": strconv.Itoa(e.brokerPort), "AGENTGATEWAY_CONFIG": jsonString(map[string]any{"installation": "acceptance", "auth": map[string]string{"username": "broker", "password": brokerPassword}, "gateway": map[string]string{"management_url": "http://127.0.0.1:9090"}, "services": services})})
+		config := map[string]any{"installation": "acceptance", "auth": map[string]string{"username": "broker", "password": brokerPassword}, "gateway": map[string]string{"management_url": "http://127.0.0.1:9090"}, "services": services}
+		if e.oauthMCP != nil {
+			config["team_oauth"] = map[string]string{"binding_key": strings.Repeat("78", 32)}
+			config["services"] = append(services, e.oauthMCP.offering(e.gatewayPort))
+		}
+		e.startContainer("broker", map[string]string{"APP_ROLE": "broker", "PORT": strconv.Itoa(e.brokerPort), "AGENTGATEWAY_CONFIG": jsonString(config)})
 		Eventually(func() int { return status(http.MethodGet, e.brokerURL()+"/ready", "", "", false) }).WithTimeout(30 * time.Second).Should(Equal(http.StatusOK))
 		return
 	}

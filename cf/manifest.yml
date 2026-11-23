@@ -12,6 +12,10 @@ applications:
     process_types: [web]
     command: exec ./bin/capsule-extmcp
     memory: 128M
+  - name: mcp-oauth
+    process_types: [web]
+    command: exec ./bin/capsule-extmcp mcp-oauth
+    memory: 64M
   health-check-type: port
   routes:
   - route: ((gateway_route))

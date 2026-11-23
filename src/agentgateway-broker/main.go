@@ -51,6 +51,7 @@ type Config struct {
 	Services              []Offering          `json:"services,omitempty"`
 	InferencePlans        []InferencePlan     `json:"inference_plans"`
 	MCPServers            []mcpconfig.Backend `json:"mcp_servers,omitempty"`
+	TeamOAuth             *teamOAuthBroker    `json:"team_oauth,omitempty"`
 }
 
 type InferencePlan struct {
@@ -116,6 +117,11 @@ func (e *apiError) Error() string { return e.message }
 var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func (c Config) validate() error {
+	if c.TeamOAuth != nil {
+		if (c.TeamOAuth.DashboardURL != "" && !mcpconfig.OAuthOrigin(c.TeamOAuth.DashboardURL)) || len(c.TeamOAuth.key()) != 32 {
+			return errors.New("team_oauth requires a 32-byte hexadecimal binding key and an HTTPS origin if a dashboard is configured")
+		}
+	}
 	if err := mcpconfig.Validate(c.MCPServers); err != nil {
 		return err
 	}
@@ -282,6 +288,10 @@ func (b *Broker) gateway(ctx context.Context, method, path string, body any, out
 	return b.management(ctx, method, "llm.apiKey", path, body, out)
 }
 func (b *Broker) management(ctx context.Context, method, kind, path string, body any, out any) (result error) {
+	return b.managementURL(ctx, method, kind, path, strings.TrimRight(b.cfg.ManagementURL, "/")+"/api/config/resources/"+kind+path, body, out)
+}
+
+func (b *Broker) managementURL(ctx context.Context, method, kind, path, endpoint string, body any, out any) (result error) {
 	// This is the single diagnostic boundary for management operations. Public
 	// handlers retain safe OSB responses; never log payloads, headers or URLs here.
 	defer func() {
@@ -298,7 +308,7 @@ func (b *Broker) management(ctx context.Context, method, kind, path string, body
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(b.cfg.ManagementURL, "/")+"/api/config/resources/"+kind+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		return errors.New("construct management request: invalid method or URL")
 	}
@@ -596,6 +606,7 @@ func (b *Broker) catalog(w http.ResponseWriter) {
 		services := []any{}
 		for _, s := range b.cfg.Services {
 			plans := []any{}
+			retrievable := false
 			for _, p := range s.Plans {
 				v := map[string]any{"id": p.ID, "name": p.Name, "description": p.Description, "free": p.Free}
 				if len(p.Schemas) > 0 {
@@ -604,11 +615,16 @@ func (b *Broker) catalog(w http.ResponseWriter) {
 				if p.Budget != nil {
 					v["metadata"] = map[string]any{"models": p.Access.Models, "usd_allowance": p.Budget.USD, "window": p.Budget.Window, "accounting": "Post-response, epoch-aligned windows; concurrency and replica synchronization can overshoot. Unbind does not revoke the shared key."}
 				} else {
-					v["metadata"] = map[string]any{"protocol": "mcp"}
+					metadata := map[string]any{"protocol": "mcp"}
+					if p.OAuthProfile != nil {
+						retrievable = true
+						metadata[mcpconfig.OAuthProfileField] = p.OAuthProfile
+					}
+					v["metadata"] = metadata
 				}
 				plans = append(plans, v)
 			}
-			services = append(services, map[string]any{"id": s.ID, "name": s.Name, "description": s.Description, "bindable": true, "plan_updateable": false, "instances_retrievable": false, "bindings_retrievable": false, "plans": plans})
+			services = append(services, map[string]any{"id": s.ID, "name": s.Name, "description": s.Description, "bindable": true, "plan_updateable": false, "instances_retrievable": retrievable, "bindings_retrievable": false, "plans": plans})
 		}
 		write(w, 200, map[string]any{"services": services})
 		return

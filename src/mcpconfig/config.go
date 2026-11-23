@@ -62,6 +62,8 @@ type Binding struct {
 	ID         string   `json:"id"`
 	Instance   Instance `json:"instance"`
 	Account    Account  `json:"account"`
+	App        string   `json:"app,omitempty"`
+	BearerHash string   `json:"bearer_hash,omitempty"`
 	Revoked    bool     `json:"revoked,omitempty"`
 }
 
@@ -303,6 +305,15 @@ func (b Binding) Route() map[string]any {
 		"authorization": map[string]any{"rules": []string{"jwt.sub == " + quote(b.Account.Subject)}},
 		"extAuthz":      map[string]any{"host": "127.0.0.1:50052", "failureMode": "deny", "protocol": map[string]any{"http": map[string]any{"path": "'/authorize-binding'", "body": body, "metadata": map[string]string{"binding": "json(response.body)"}}}},
 		"mcpGuardrails": map[string]any{"processors": []any{map[string]any{"kind": "remote", "host": "127.0.0.1:50051", "failureMode": "failClosed", "methods": map[string]string{"tools/call": "full"}, "metadata": map[string]string{"binding": "extauthz.binding", "capsule_plan": "has(mcpGuardrails.capsule_plan) ? mcpGuardrails.capsule_plan : ''"}}}},
+	}
+	if backend.Auth.Method == TeamOAuthMethod {
+		delete(policies, "jwtAuth")
+		delete(policies, "authorization")
+		policies["extAuthz"] = map[string]any{"host": "127.0.0.1:50053", "failureMode": "deny", "protocol": map[string]any{"http": map[string]any{
+			"path": "'/authorize'", "body": `{"binding_id":` + quote(b.ID) + `,"instance_id":` + quote(b.Instance.ID) + `,"target":` + quote(b.TargetName()) + `}`, "metadata": map[string]string{"binding": "json(response.body)"}, "includeResponseHeaders": []string{"x-agw-mcp-binding"},
+		}}}
+		processor := policies["mcpGuardrails"].(map[string]any)["processors"].([]any)[0].(map[string]any)
+		processor["requestHeaders"] = map[string]any{"disallowed": []string{"authorization", "cookie"}}
 	}
 	return map[string]any{"name": b.RouteName(), "gateways": []string{"inference"}, "matches": []any{map[string]any{"path": map[string]any{"exact": b.Path()}}}, "policies": policies, "backends": []any{map[string]any{"mcp": map[string]any{"targets": []any{map[string]any{"name": b.TargetName(), "mcp": map[string]string{"host": backend.URL}, "policies": targetPolicies}}}}}}
 }
