@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -56,21 +57,79 @@ func metadataURL(resource, wellKnown string) string {
 	return u.String()
 }
 
+var challengePart = regexp.MustCompile(`(?:[^,"]|"(?:[^"\\]|\\.)*")+`)
+var challengeParam = regexp.MustCompile(`(?i)^resource_metadata\s*=\s*"([^"\\]+)"$`)
+
+func advertisedMetadata(ctx context.Context, resource string) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cf-agentgateway","version":"1"}}}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, resource, strings.NewReader(body))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := oauthHTTP.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		return ""
+	}
+	for _, header := range resp.Header.Values("WWW-Authenticate") {
+		bearer := false
+		for _, part := range challengePart.FindAllString(header, -1) {
+			part = strings.TrimSpace(part)
+			if i := strings.IndexAny(part, " \t"); i >= 0 && !strings.Contains(part[:i], "=") && !strings.HasPrefix(strings.TrimSpace(part[i:]), "=") {
+				bearer = strings.EqualFold(part[:i], "Bearer")
+				part = strings.TrimSpace(part[i:])
+			} else if !strings.Contains(part, "=") {
+				bearer = strings.EqualFold(part, "Bearer")
+			}
+			if match := challengeParam.FindStringSubmatch(part); bearer && match != nil && mcpconfig.OAuthURL(match[1]) {
+				return match[1]
+			}
+		}
+	}
+	return ""
+}
+
+func discoverProtectedResource(ctx context.Context, p mcpconfig.OAuthProfile) error {
+	const wellKnown = "/.well-known/oauth-protected-resource"
+	u, _ := url.Parse(p.Resource)
+	u.Path, u.RawPath = wellKnown, ""
+	seen := map[string]bool{"": true}
+	for _, endpoint := range []string{advertisedMetadata(ctx, p.Resource), metadataURL(p.Resource, wellKnown), u.String()} {
+		if seen[endpoint] {
+			continue
+		}
+		seen[endpoint] = true
+		var protected struct {
+			Resource string
+			Servers  []string `json:"authorization_servers"`
+		}
+		if err := oauthJSON(ctx, endpoint, nil, &protected); err != nil {
+			continue
+		}
+		if protected.Resource != p.Resource {
+			return errors.New("MCP discovery does not match the operator OAuth profile")
+		}
+		for _, issuer := range protected.Servers {
+			if issuer == p.Issuer {
+				return nil
+			}
+		}
+		return errors.New("MCP discovery does not match the operator OAuth profile")
+	}
+	return errors.New("MCP protected resource metadata is unavailable")
+}
+
 func login(ctx context.Context, p mcpconfig.OAuthProfile) (mcpconfig.OAuthAccess, error) {
 	var none mcpconfig.OAuthAccess
-	var protected struct {
-		Resource string
-		Servers  []string `json:"authorization_servers"`
-	}
-	if err := oauthJSON(ctx, metadataURL(p.Resource, "/.well-known/oauth-protected-resource"), nil, &protected); err != nil {
+	if err := discoverProtectedResource(ctx, p); err != nil {
 		return none, err
-	}
-	trusted := false
-	for _, issuer := range protected.Servers {
-		trusted = trusted || issuer == p.Issuer
-	}
-	if protected.Resource != p.Resource || !trusted {
-		return none, errors.New("MCP discovery does not match the operator OAuth profile")
 	}
 	var as struct {
 		Issuer      string

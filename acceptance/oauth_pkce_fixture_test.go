@@ -73,7 +73,7 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 	var mu sync.Mutex
 	codes := map[string]url.Values{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /oauth/resource-metadata", func(w http.ResponseWriter, r *http.Request) {
 		stubJSON(w, 200, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{fixtureOAuthScope}})
 	})
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 	})
 	mux.HandleFunc("POST /mcp", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+fixtureOAuthAccessToken {
-			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/.well-known/oauth-protected-resource/mcp", scope="`+fixtureOAuthScope+`"`)
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/oauth/resource-metadata", scope="`+fixtureOAuthScope+`"`)
 			w.WriteHeader(401)
 			return
 		}
