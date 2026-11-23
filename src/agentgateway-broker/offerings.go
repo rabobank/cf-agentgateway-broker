@@ -1,6 +1,7 @@
 package main
 
 import (
+	mcpconfig "cf-mcp-config"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -34,7 +35,8 @@ type OfferingPlan struct {
 		USD    json.Number `json:"usd"`
 		Window string      `json:"window"`
 	} `json:"budget,omitempty"`
-	Schemas map[string]any `json:"schemas,omitempty"`
+	Schemas      map[string]any          `json:"schemas,omitempty"`
+	OAuthProfile *mcpconfig.OAuthProfile `json:"oauth_profile,omitempty"`
 }
 
 func (c Config) offering(service, plan string) (*Offering, *OfferingPlan) {
@@ -87,6 +89,9 @@ func (c Config) validateOfferings() error {
 			plans[p.ID], local[p.Name] = true, true
 			if strings.TrimSpace(p.Description) == "" {
 				return errors.New("plan description required")
+			}
+			if p.OAuthProfile != nil && (s.Protocol != "mcp" || p.OAuthProfile.Validate() != nil || len(p.Access.Backends) != 1 || len(p.Schemas) != 0 || c.TeamOAuth == nil) {
+				return errors.New("OAuth profile requires a team MCP plan, one backend, and CLI connection mode")
 			}
 			switch s.Protocol {
 			case "llm":

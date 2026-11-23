@@ -31,9 +31,10 @@ type CallerAuth struct {
 	} `json:"jwks"`
 }
 type SharedBackend struct {
-	Name     string `json:"name"`
-	Revision string `json:"revision"`
-	MCP      struct {
+	Name      string     `json:"name"`
+	Revision  string     `json:"revision"`
+	TeamOAuth *TeamOAuth `json:"team_oauth,omitempty"`
+	MCP       struct {
 		Targets []map[string]any `json:"targets"`
 	} `json:"mcp"`
 }
@@ -71,9 +72,10 @@ type GatewayOperator struct {
 	} `json:"llm"`
 	ModelCatalog json.RawMessage `json:"model_catalog"`
 	MCP          struct {
-		SessionKey string          `json:"session_key"`
-		CallerAuth CallerAuth      `json:"caller_auth"`
-		Backends   []SharedBackend `json:"backends"`
+		SessionKey   string          `json:"session_key"`
+		CallerAuth   CallerAuth      `json:"caller_auth"`
+		Backends     []SharedBackend `json:"backends"`
+		OAuthUpdates *OAuthUpdates   `json:"oauth_updates,omitempty"`
 	} `json:"mcp"`
 	Capsules CapsuleOperator `json:"capsules"`
 }

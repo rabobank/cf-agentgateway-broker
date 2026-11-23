@@ -12,10 +12,12 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 	var response struct {
 		Resources []struct {
 			Value struct {
-				Name       string               `json:"name"`
-				Revision   string               `json:"revision"`
-				CallerAuth mcpconfig.CallerAuth `json:"callerAuth"`
-				Targets    []map[string]any     `json:"targets"`
+				Name          string               `json:"name"`
+				Revision      string               `json:"revision"`
+				CallerAuth    mcpconfig.CallerAuth `json:"callerAuth"`
+				TeamOAuth     bool                 `json:"teamOAuth"`
+				OAuthResource string               `json:"oauthResource"`
+				Targets       []map[string]any     `json:"targets"`
 			} `json:"value"`
 		} `json:"resources"`
 	}
@@ -32,10 +34,27 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 				continue
 			}
 			found = true
-			if !resourceID.MatchString(v.Revision) || len(v.CallerAuth.Audiences) != 1 || v.CallerAuth.Issuer == "" || v.CallerAuth.JWKS.URL == "" {
+			if !resourceID.MatchString(v.Revision) {
 				return nil, nil, errors.New("invalid shared MCP backend contract")
 			}
-			current := &mcpconfig.Backend{Name: name, Auth: mcpconfig.Auth{Method: "native", Issuer: v.CallerAuth.Issuer, JWKSURL: v.CallerAuth.JWKS.URL, Audience: v.CallerAuth.Audiences[0]}}
+			current := &mcpconfig.Backend{Name: name}
+			if v.TeamOAuth {
+				if len(plan.Access.Backends) != 1 || len(v.Targets) != 1 || len(params) != 0 {
+					return nil, nil, errors.New("team OAuth requires one backend, one target and no identity parameters")
+				}
+				current.Auth.Method = mcpconfig.TeamOAuthMethod
+				if v.OAuthResource != "" && (plan.OAuthProfile == nil || v.OAuthResource != plan.OAuthProfile.Resource) || v.OAuthResource == "" && plan.OAuthProfile != nil {
+					return nil, nil, errors.New("OAuth profile does not match the gateway backend")
+				}
+			} else {
+				if plan.OAuthProfile != nil {
+					return nil, nil, errors.New("OAuth profile requires a team OAuth backend")
+				}
+				if len(v.CallerAuth.Audiences) != 1 || v.CallerAuth.Issuer == "" || v.CallerAuth.JWKS.URL == "" {
+					return nil, nil, errors.New("invalid shared MCP caller trust")
+				}
+				current.Auth = mcpconfig.Auth{Method: "native", Issuer: v.CallerAuth.Issuer, JWKSURL: v.CallerAuth.JWKS.URL, Audience: v.CallerAuth.Audiences[0]}
+			}
 			if backend != nil { // Compare only caller trust, never shared upstream secrets.
 				if backend.Auth.Issuer != current.Auth.Issuer || backend.Auth.Audience != current.Auth.Audience || backend.Auth.JWKSURL != current.Auth.JWKSURL {
 					return nil, nil, errors.New("MCP backend caller trust mismatch")
@@ -59,7 +78,7 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 					} `json:"policies"`
 				}
 				_ = json.Unmarshal(data, &native)
-				selected := mcpconfig.SelectedIdentity{BackendID: name, AuthMethod: "native"}
+				selected := mcpconfig.SelectedIdentity{BackendID: name, AuthMethod: current.Auth.Method}
 				// Native client IDs can be fixed operator values or explicit
 				// instance-selection markers. Both identify the selected principal.
 				_ = json.Unmarshal(native.Policies.Auth.Exchange.Client.ID, &selected.ClientID)

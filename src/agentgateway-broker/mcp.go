@@ -49,7 +49,7 @@ func (b *Broker) managed(ctx context.Context, kind, id string) (json.RawMessage,
 	var list struct {
 		Resources []managedResource `json:"resources"`
 	}
-	if err := b.management(ctx, http.MethodGet, kind, "", nil, &list); err != nil {
+	if err := b.management(ctx, http.MethodGet, kind, "/"+url.PathEscape(id), nil, &list); err != nil {
 		return nil, err
 	}
 	for _, v := range list.Resources {
@@ -84,6 +84,29 @@ func (b *Broker) instance(ctx context.Context, id string) (*mcpconfig.Instance, 
 }
 
 func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string) bool {
+	if r.Method == http.MethodGet && len(parts) == 3 && b.cfg.TeamOAuth != nil {
+		instance, err := b.instance(r.Context(), parts[2])
+		if err != nil {
+			fail(w, 503, "cannot recover managed instance")
+			return true
+		}
+		if instance == nil {
+			fail(w, 404, "instance not found")
+			return true
+		}
+		reply := map[string]any{"service_id": instance.ServiceID, "plan_id": instance.PlanID, "parameters": instance.Parameters}
+		_, plan := b.cfg.offering(instance.ServiceID, instance.PlanID)
+		if plan != nil && plan.OAuthProfile != nil {
+			var status mcpconfig.OAuthStatus
+			if b.oauthManagement(r.Context(), http.MethodGet, managedID(b.cfg.Installation, instance.ID, ""), nil, &status) != nil {
+				fail(w, 503, "OAuth connection status unavailable")
+				return true
+			}
+			reply["parameters"] = map[string]any{mcpconfig.OAuthProfileField: status}
+		}
+		write(w, 200, reply)
+		return true
+	}
 	if r.Method != http.MethodPut && r.Method != http.MethodDelete && r.Method != http.MethodPatch {
 		return false
 	}
@@ -102,6 +125,30 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		req.ServiceID = r.URL.Query().Get("service_id")
 		req.PlanID = r.URL.Query().Get("plan_id")
 	}
+	if r.Method == http.MethodPatch {
+		if len(parts) != 3 {
+			fail(w, 404, "not found")
+			return true
+		}
+		if len(b.cfg.MCPServers) == 0 && len(b.cfg.Services) == 0 {
+			return false
+		}
+		instance, err := b.instance(r.Context(), parts[2])
+		if err != nil {
+			fail(w, 503, "cannot recover managed instance")
+			return true
+		}
+		if instance == nil {
+			fail(w, 404, "instance not found")
+			return true
+		}
+		if instance.ServiceID != req.ServiceID || (req.PlanID != "" && instance.PlanID != req.PlanID) {
+			fail(w, 409, "instance service or plan mismatch")
+			return true
+		}
+		b.updateOAuth(w, r, instance, req)
+		return true
+	}
 	backend := b.backend(req.PlanID)
 	offering, plan := b.cfg.offering(req.ServiceID, req.PlanID)
 	shared := offering != nil && offering.Protocol == "mcp"
@@ -113,10 +160,6 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 	}
 	if !shared && req.ServiceID != b.cfg.ServiceID {
 		fail(w, 400, "unknown service")
-		return true
-	}
-	if r.Method == http.MethodPatch {
-		fail(w, 422, "plan updates are not supported")
 		return true
 	}
 	if len(parts) != 3 && !(len(parts) == 5 && parts[3] == "service_bindings" && resourceID.MatchString(parts[4])) {
@@ -160,6 +203,12 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 					return true
 				}
 			}
+			if shared && (instance == nil && b.cfg.TeamOAuth != nil || instance != nil && instance.Backend.Auth.Method == mcpconfig.TeamOAuthMethod) {
+				if b.deleteManaged(ctx, "mcp.oauthConnection", instanceID) != nil {
+					fail(w, 503, "cannot clean up connection")
+					return true
+				}
+			}
 			if instance == nil {
 				write(w, 410, map[string]any{})
 			} else {
@@ -190,6 +239,10 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		}
 		if err != nil {
 			fail(w, 400, err.Error())
+			return true
+		}
+		if backend.Auth.Method == mcpconfig.TeamOAuthMethod && b.cfg.TeamOAuth == nil {
+			fail(w, 503, "team OAuth binding key unavailable")
 			return true
 		}
 		legacy, err := b.find(ctx, id)
@@ -242,14 +295,23 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		return true
 	}
 	binding := mcpconfig.Binding{ID: parts[4], Instance: *instance}
-	account, _ := json.Marshal(req.Context["service_account"])
-	if json.Unmarshal(account, &binding.Account) != nil || binding.Account.Subject == "" {
-		fail(w, 422, "context.service_account must contain a nonempty subject and a trusted issuer")
-		return true
-	}
-	if binding.Account.Issuer != instance.Backend.Auth.Issuer {
-		fail(w, 422, "context.service_account.issuer must match the plan's configured auth.issuer")
-		return true
+	team := instance.Backend.Auth.Method == mcpconfig.TeamOAuthMethod
+	if team {
+		if b.cfg.TeamOAuth == nil {
+			fail(w, 503, "team OAuth binding key unavailable")
+			return true
+		}
+		binding.App = app
+	} else {
+		account, _ := json.Marshal(req.Context["service_account"])
+		if json.Unmarshal(account, &binding.Account) != nil || binding.Account.Subject == "" {
+			fail(w, 422, "context.service_account must contain a nonempty subject and a trusted issuer")
+			return true
+		}
+		if binding.Account.Issuer != instance.Backend.Auth.Issuer {
+			fail(w, 422, "context.service_account.issuer must match the plan's configured auth.issuer")
+			return true
+		}
 	}
 	raw, err := b.managed(ctx, "mcp.grant", grantID)
 	if err != nil {
@@ -259,7 +321,7 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 	if raw != nil {
 		var resource managedValue
 		var existing mcpconfig.Binding
-		if json.Unmarshal(raw, &resource) != nil || json.Unmarshal(resource.Metadata, &existing) != nil || existing.Account != binding.Account || existing.Instance.Generation != instance.Generation {
+		if json.Unmarshal(raw, &resource) != nil || json.Unmarshal(resource.Metadata, &existing) != nil || existing.Account != binding.Account || existing.App != binding.App || existing.Instance.Generation != instance.Generation {
 			fail(w, 409, "binding identity conflict")
 			return true
 		}
@@ -269,6 +331,9 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		if err != nil {
 			fail(w, 500, "cannot allocate binding generation")
 			return true
+		}
+		if team {
+			_, binding.BearerHash = b.cfg.TeamOAuth.bearer(binding)
 		}
 		data, _ := json.Marshal(binding)
 		if _, err := binding.TargetIdentities(); err != nil {
@@ -293,6 +358,15 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 	if shared {
 		base = strings.TrimSuffix(strings.TrimRight(offering.Connection.URL, "/"), "/mcp")
 		trusted = offering.Connection.TrustedCA
+	}
+	if team {
+		token, hash := b.cfg.TeamOAuth.bearer(binding)
+		if hash != binding.BearerHash {
+			fail(w, 503, "team OAuth binding key incompatible with existing binding")
+			return true
+		}
+		write(w, 201, map[string]any{"credentials": map[string]any{"mcp_url": base + binding.Path(), "headers": map[string]string{"Authorization": "Bearer " + token}, "auth_method": mcpconfig.TeamOAuthMethod, "trusted_ca": trusted}})
+		return true
 	}
 	write(w, 201, map[string]any{"credentials": map[string]any{"mcp_url": base + binding.Path(), "audience": instance.Backend.Auth.Audience, "issuer": binding.Account.Issuer, "subject": binding.Account.Subject, "auth_method": instance.Backend.Auth.Method, "trusted_ca": trusted}})
 	return true

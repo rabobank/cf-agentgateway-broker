@@ -30,7 +30,7 @@ func TestMCPProvisionRetryUsesPersistedSnapshot(t *testing.T) {
 					w.WriteHeader(500)
 					return
 				}
-				if strings.HasSuffix(r.URL.Path, "/mcp.instance") {
+				if strings.HasSuffix(r.URL.Path, "/mcp.instance/"+managedID(b.cfg.Installation, "one", "")) {
 					write(w, 200, map[string]any{"resources": []any{map[string]any{"id": managedID(b.cfg.Installation, "one", ""), "value": managedValue{Name: managedID(b.cfg.Installation, "one", ""), Metadata: metadata}}}})
 					return
 				}
@@ -91,8 +91,16 @@ func TestMCPTranslatorRecoversFromGatewayStateWithoutDatabase(t *testing.T) {
 			resources[kind] = map[string]json.RawMessage{}
 		}
 		if r.Method == http.MethodGet {
+			if len(parts) == 1 && kind == "mcp.instance" {
+				t.Error("instance lookup requested the entire collection")
+				w.WriteHeader(500)
+				return
+			}
 			var list []any
 			for id, value := range resources[kind] {
+				if len(parts) == 2 && parts[1] != id {
+					continue
+				}
 				list = append(list, map[string]any{"id": id, "value": value})
 			}
 			write(w, 200, map[string]any{"resources": list})

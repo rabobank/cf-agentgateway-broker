@@ -48,6 +48,30 @@ func TestOperatorGatewayValidatesUnusedMCPTemplates(t *testing.T) {
 	}
 }
 
+func TestTeamOAuthOperatorWiresOnlyExplicitToolsAndLoopbackProxy(t *testing.T) {
+	t.Setenv("VCAP_SERVICES", `{"postgres":[{"name":"state","credentials":{"uri":"postgres://db/gateway"}}]}`)
+	storageKey := strings.Repeat("34", 32)
+	raw := `{"database":{"service_name":"state"},"mcp":{"session_key":"` + strings.Repeat("12", 32) + `","oauth_updates":{"encryption_key":"` + storageKey + `"},"backends":[{"name":"design","revision":"v1","team_oauth":{"allowed_tools":["get_metadata"]},"mcp":{"targets":[{"name":"tools","mcp":{"host":"https://mcp.test/mcp"}}]}}]}}`
+	cfg, err := operatorGateway([]byte(raw), 8123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(cfg)
+	for _, expected := range []string{"127.0.0.1:50053/upstream/design", `"teamOAuth":true`, `"allowedTools":["get_metadata"]`} {
+		if !strings.Contains(string(data), expected) {
+			t.Errorf("missing %s", expected)
+		}
+	}
+	if strings.Contains(string(data), storageKey) {
+		t.Fatal("operator OAuth configuration leaked into native routing")
+	}
+	for _, replacement := range []string{`"allowed_tools":[]`, `"allowed_tools":["*"]`} {
+		if _, err := operatorGateway([]byte(strings.Replace(raw, `"allowed_tools":["get_metadata"]`, replacement, 1)), 8123); err == nil {
+			t.Fatal("invalid tool allowlist accepted")
+		}
+	}
+}
+
 func TestOperatorBrokerPreservesConsumerTrustAndRejectsLegacyFields(t *testing.T) {
 	t.Setenv("MANAGEMENT_URL", "")
 	t.Setenv("MANAGEMENT_TRUSTED_CA", "")

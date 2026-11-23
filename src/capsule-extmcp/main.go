@@ -279,7 +279,11 @@ func runLeader(ctx context.Context, lease *postgres.Leadership, runner *checkpoi
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-	if err := run(ctx); err != nil {
+	start := run
+	if len(os.Args) == 2 && os.Args[1] == "mcp-oauth" {
+		start = runTeamOAuth
+	}
+	if err := start(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

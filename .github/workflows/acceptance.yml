@@ -99,7 +99,19 @@ jobs:
 
       # The gateway launcher uses fixed management ports, so this suite must
       # run serially rather than using Ginkgo's parallel processes.
+      - name: Install CF CLI for plugin acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v8.19.0 --repo cloudfoundry/cli --pattern cf8-cli_8.19.0_linux_x86-64.tgz --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/cf-cli"
+          tar -xzf "$RUNNER_TEMP/cf8-cli_8.19.0_linux_x86-64.tgz" -C "$RUNNER_TEMP/cf-cli"
+          ln -sf "$RUNNER_TEMP/cf-cli/cf8" "$RUNNER_TEMP/cf-cli/cf"
+          echo "$RUNNER_TEMP/cf-cli" >> "$GITHUB_PATH"
+
       - name: Run acceptance tests
+        env:
+          REQUIRE_CF_CLI: "true"
         run: >-
           devbox run -- go -C acceptance run github.com/onsi/ginkgo/v2/ginkgo
           --randomize-all --fail-on-pending --fail-on-empty --trace
@@ -125,7 +137,7 @@ jobs:
             --transform='s|^cf/dist/|dist/|' \
             cf/README.md cf/configuration.md cf/manifest.yml cf/dev-vars.yml cf/deploy \
             cf/config-vars cf/broker.example.yml cf/gateway.example.yml cf/deployment.example.yml \
-            cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin
+            cf/dist/gateway/bin cf/dist/gateway/lib cf/dist/broker/bin cf/dist/cf-agentgateway
           cd "$RUNNER_TEMP/release-bundles"
           sha256sum ./*.tar.gz > SHA256SUMS
 
