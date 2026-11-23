@@ -37,7 +37,9 @@ func TestTeamOAuthBindingAndUpstreamIsolation(t *testing.T) {
 	defer provider.Close()
 	var cfg mcpconfig.GatewayOperator
 	cfg.Capsules.LogID = "lab"
-	cfg.MCP.OAuthUpdates = &mcpconfig.OAuthUpdates{PrivateKey: strings.Repeat("34", 32), StorageKey: strings.Repeat("12", 32)}
+	cfg.MCP.OAuthDashboard = &mcpconfig.OAuthDashboard{PublicURL: "https://dashboard.test", CFAPI: "https://cf.test", Key: strings.Repeat("12", 32), Login: mcpconfig.OAuthClient{
+		AuthorizationURL: "https://uaa.test/oauth/authorize", TokenURL: "https://uaa.test/oauth/token", ClientID: "dashboard", ClientSecret: "dummy", ClientAuth: "client_secret_basic", Scopes: []string{"cloud_controller_service_permissions.read"},
+	}}
 	backend := mcpconfig.SharedBackend{Name: "test", Revision: "v1", TeamOAuth: &mcpconfig.TeamOAuth{AllowedTools: []string{"read_design"}}}
 	backend.MCP.Targets = []map[string]any{{"name": "design", "mcp": map[string]any{"host": provider.URL}}}
 	cfg.MCP.Backends = []mcpconfig.SharedBackend{backend}
@@ -158,6 +160,76 @@ func TestTeamOAuthBindingAndUpstreamIsolation(t *testing.T) {
 	revoked.Store(true)
 	if w := proxy(read, ""); w.Code != 403 || upstreamCalls.Load() != 2 {
 		t.Fatal("unbind did not revoke upstream access")
+	}
+}
+
+func TestDashboardImportRequiresLiveManagePermission(t *testing.T) {
+	var cfg mcpconfig.GatewayOperator
+	cfg.Capsules.LogID = "lab"
+	cfg.MCP.OAuthDashboard = &mcpconfig.OAuthDashboard{PublicURL: "https://dashboard.test", CFAPI: "https://cf.test", Key: strings.Repeat("12", 32), Login: mcpconfig.OAuthClient{
+		AuthorizationURL: "https://uaa.test/oauth/authorize", TokenURL: "https://uaa.test/oauth/token", ClientID: "dashboard", ClientSecret: "dummy", ClientAuth: "client_secret_basic", Scopes: []string{"cloud_controller_service_permissions.read"},
+	}}
+	d, err := newTeamDashboard(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.backends["test"] = oauthBackend{endpoint: "https://upstream.test/mcp", revision: "v1"}
+	id := mcpconfig.ManagedID("lab", "instance", "")
+	var allowed atomic.Bool
+	var writes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v3/service_instances/instance/permissions":
+			_ = json.NewEncoder(w).Encode(map[string]bool{"manage": allowed.Load() && r.Header.Get("Authorization") == "Bearer cf-user"})
+		case "/api/config/resources/mcp.instance/" + id:
+			fmt.Fprintf(w, `{"generation":1,"resources":[{"id":%q,"value":{"metadata":{"installation":"lab","id":"instance","generation":"gen","backend":{"auth":{"method":"team_oauth"}},"backend_selections":[{"name":"test","revision":"v1"}]}}}]}`, id)
+		case "/api/config/resources/" + oauthKind, "/api/config/resources/" + oauthKind + "/" + id:
+			if r.Method == http.MethodPut {
+				writes.Add(1)
+				var request struct {
+					Resources []struct{ Value oauthConnection }
+				}
+				if r.Header.Get("If-Match") != `"1"` || json.NewDecoder(r.Body).Decode(&request) != nil || len(request.Resources) != 1 {
+					t.Error("connection write was not conditional")
+					return
+				}
+				c := request.Resources[0].Value
+				var upstream upstreamSecret
+				if c.Name != id || strings.Contains(c.Sealed, "figma-secret") || !d.open(connectionPurpose(c), c.Sealed, &upstream) || upstream.Token != "figma-secret" {
+					t.Error("connection was not stored as an instance-bound ciphertext")
+				}
+				return
+			}
+			fmt.Fprint(w, `{"generation":1,"resources":[]}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	d.admin, d.config.CFAPI = server.URL, server.URL
+	sealed, err := d.seal(dashboardCookie, dashboardUser{"cf-user", "csrf", time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(origin string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", dashboardPath+id, strings.NewReader("action=connect&csrf=csrf&token=figma-secret&expires="+time.Now().UTC().Add(time.Hour).Format(time.RFC3339)))
+		r.SetPathValue("instance", id)
+		r.Header.Set("Origin", origin)
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: dashboardCookie, Value: sealed})
+		w := httptest.NewRecorder()
+		d.changeConnection(w, r)
+		return w
+	}
+	if w := post(d.config.PublicURL); w.Code != 403 || writes.Load() != 0 {
+		t.Fatal("import accepted without manage permission")
+	}
+	allowed.Store(true)
+	if w := post("https://other.test"); w.Code != 403 || writes.Load() != 0 {
+		t.Fatal("cross-origin import accepted")
+	}
+	if w := post(d.config.PublicURL); w.Code != 303 || writes.Load() != 1 || strings.Contains(w.Body.String(), "figma-secret") {
+		t.Fatalf("authorized import failed or echoed the secret: HTTP %d", w.Code)
 	}
 }
 
