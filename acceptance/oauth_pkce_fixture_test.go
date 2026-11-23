@@ -54,6 +54,10 @@ const oauthFixtureName = "oauth-pkce-mcp"
 const fixtureOAuthAccessToken = "fixture-upstream-access-token"
 const fixtureOAuthScope = "mcp:connect"
 
+func fixtureAccessToken(exchange int64) string {
+	return fmt.Sprintf("%s-%d", fixtureOAuthAccessToken, exchange)
+}
+
 type oauthPKCEFixture struct {
 	server    *httptest.Server
 	exchanges atomic.Int64
@@ -67,6 +71,9 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 	f := &oauthPKCEFixture{}
 	var mu sync.Mutex
 	codes := map[string]url.Values{}
+	tokens := map[string]int64{}
+	sessions := map[string]int64{}
+	var nextSession int
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth/resource-metadata", func(w http.ResponseWriter, r *http.Request) {
 		stubJSON(w, 200, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{fixtureOAuthScope}})
@@ -105,11 +112,18 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 			stubJSON(w, 400, map[string]string{"error": "invalid_grant"})
 			return
 		}
-		f.exchanges.Add(1)
-		stubJSON(w, 200, map[string]any{"access_token": fixtureOAuthAccessToken, "token_type": "Bearer", "expires_in": 3600})
+		mu.Lock()
+		exchange := f.exchanges.Add(1)
+		token := fixtureAccessToken(exchange)
+		tokens["Bearer "+token] = exchange
+		mu.Unlock()
+		stubJSON(w, 200, map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 3600})
 	})
 	mux.HandleFunc("POST /mcp", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+fixtureOAuthAccessToken {
+		mu.Lock()
+		exchange := tokens[r.Header.Get("Authorization")]
+		mu.Unlock()
+		if exchange == 0 {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/oauth/resource-metadata", scope="`+fixtureOAuthScope+`"`)
 			w.WriteHeader(401)
 			return
@@ -123,6 +137,18 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 			w.WriteHeader(400)
 			return
 		}
+		mu.Lock()
+		if msg.Method == "initialize" {
+			nextSession++
+			id := fmt.Sprintf("fixture-session-%d", nextSession)
+			sessions[id] = exchange
+			w.Header().Set("Mcp-Session-Id", id)
+		} else if sessions[r.Header.Get("Mcp-Session-Id")] != exchange {
+			mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		mu.Unlock()
 		if msg.ID == nil {
 			w.WriteHeader(202)
 			return
@@ -137,7 +163,7 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 			if msg.Params.Name == "write_design" {
 				f.writes.Add(1)
 			}
-			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": "upstream-ok"}}}
+			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": fmt.Sprintf("upstream-ok: authorization %d", exchange)}}}
 		default:
 			w.WriteHeader(400)
 			return
