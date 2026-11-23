@@ -87,7 +87,13 @@ func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request)
 				http.Error(w, "invalid OAuth access token or expiry", 400)
 				return
 			}
-			c.Sealed, err = d.seal(connectionPurpose(c), upstreamSecret{Token: access.Token, Expires: access.Expires, Epoch: update.Operation})
+			// An operation ID is supplied by the caller and can be reused after
+			// intervening updates. Never use it to authorize session resumption.
+			epoch, err := nonce()
+			if err != nil {
+				break
+			}
+			c.Sealed, err = d.seal(connectionPurpose(c), upstreamSecret{Token: access.Token, Expires: access.Expires, Epoch: epoch})
 			if err != nil {
 				break
 			}
@@ -108,6 +114,6 @@ func (d *teamDashboard) sameConnectionUpdate(c oauthConnection, update mcpconfig
 		return c.Sealed == ""
 	}
 	var stored upstreamSecret
-	return d.open(connectionPurpose(c), c.Sealed, &stored) && stored.Epoch == update.Operation &&
+	return d.open(connectionPurpose(c), c.Sealed, &stored) && stored.Epoch != "" &&
 		stored.Token == update.Access.Token && stored.Expires.Equal(update.Access.Expires)
 }

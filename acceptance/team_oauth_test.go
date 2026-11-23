@@ -130,11 +130,37 @@ var _ = Describe("team MCP OAuth authorization code with PKCE", Label("cf-plugin
 		expectRequest(200, "PATCH", path, connect, "", true)
 		Expect(cli("ag", "status", "team-design")).To(ContainSubstring("team-design: connected"))
 		session = findSession()
+		code, _, body = call(session, "tools/call", tool)
+		Expect(code).To(Equal(200), body)
+		Expect(body).To(ContainSubstring("upstream-ok: authorization 1"))
 		By("disconnecting and blocking old sessions and replayed connect updates")
 		Expect(cli("ag", "disconnect", "team-design")).To(ContainSubstring("team-design: not connected"))
 		expectRequest(409, "PATCH", path, connect, "", true)
 		code, _, body = call(session, "tools/call", tool)
 		Expect(code).NotTo(Equal(200), body)
+		By("keeping old sessions invalid even if a reconnect reuses the operation ID and token")
+		var reconnect struct {
+			ServiceID  string                    `json:"service_id"`
+			Parameters map[string]map[string]any `json:"parameters"`
+		}
+		Expect(json.Unmarshal([]byte(connect), &reconnect)).To(Succeed())
+		var disconnected struct {
+			Parameters map[string]struct {
+				Operation string `json:"operation"`
+				Sequence  uint64 `json:"sequence"`
+			} `json:"parameters"`
+		}
+		Expect(json.Unmarshal(expectRequest(200, "GET", path, "", "", true).body, &disconnected)).To(Succeed())
+		previous := disconnected.Parameters[mcpOAuthMetadata]
+		reconnect.Parameters[mcpOAuthMetadata]["previous"] = previous.Operation
+		reconnect.Parameters[mcpOAuthMetadata]["sequence"] = previous.Sequence
+		expectRequest(200, "PATCH", path, jsonString(reconnect), "", true)
+		_, _, body = call(session, "tools/call", tool)
+		Expect(body).NotTo(ContainSubstring("upstream-ok"))
+		code, _, body = call(findSession(), "tools/call", tool)
+		Expect(code).To(Equal(200), body)
+		Expect(body).To(ContainSubstring("upstream-ok: authorization 1"))
+		Expect(cli("ag", "disconnect", "team-design")).To(ContainSubstring("team-design: not connected"))
 		Expect(cli("ag", "connect", "team-design")).To(ContainSubstring("team-design: connected"))
 		By("replacing the upstream authorization and invalidating its existing session")
 		session = findSession()
