@@ -84,7 +84,7 @@ func (b *Broker) instance(ctx context.Context, id string) (*mcpconfig.Instance, 
 }
 
 func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string) bool {
-	if r.Method == http.MethodGet && len(parts) == 3 && b.cfg.TeamOAuth != nil {
+	if r.Method == http.MethodGet && len(parts) == 3 && b.cfg.TeamOAuth != nil && b.cfg.TeamOAuth.DashboardURL == "" {
 		instance, err := b.instance(r.Context(), parts[2])
 		if err != nil {
 			fail(w, 503, "cannot recover managed instance")
@@ -221,7 +221,7 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			if instance.Fingerprint != fp {
 				fail(w, 409, "instance parameters conflict")
 			} else {
-				write(w, 200, map[string]any{})
+				write(w, 200, b.provisionResult(instance))
 			}
 			return true
 		}
@@ -242,7 +242,7 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			return true
 		}
 		if backend.Auth.Method == mcpconfig.TeamOAuthMethod && b.cfg.TeamOAuth == nil {
-			fail(w, 503, "team OAuth binding key unavailable")
+			fail(w, 503, "team OAuth dashboard and binding key unavailable")
 			return true
 		}
 		legacy, err := b.find(ctx, id)
@@ -265,7 +265,7 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 			fail(w, 503, "cannot publish instance configuration")
 			return true
 		}
-		write(w, 201, map[string]any{})
+		write(w, 201, b.provisionResult(instance))
 		return true
 	}
 	grantID := managedID(b.cfg.Installation, id, parts[4])
