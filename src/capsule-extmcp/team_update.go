@@ -3,8 +3,6 @@ package main
 import (
 	mcpconfig "cf-mcp-config"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -48,9 +46,6 @@ func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request)
 	id := r.PathValue("instance")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	body, _ := json.Marshal(update)
-	hash := sha256.Sum256(body)
-	digest := hex.EncodeToString(hash[:])
 	// Each retry uses a fresh snapshot; the operation predecessor fences stale
 	// requests, while the generation precondition fences concurrent lifecycle changes.
 	for range 3 {
@@ -63,25 +58,33 @@ func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "instance changed", 409)
 			return
 		}
+		backend := i.Selections[0]
+		if update.Resource != d.backends[backend.Name].endpoint {
+			http.Error(w, "upstream resource changed", 409)
+			return
+		}
 		var current oauthConnection
 		if s.find(id, &current) && current.Generation != i.Generation {
 			current = oauthConnection{}
 		}
-		if current.Operation == update.Operation && current.Digest == digest {
-			w.WriteHeader(204)
+		if current.Operation == update.Operation {
+			if d.sameConnectionUpdate(current, update, backend) {
+				w.WriteHeader(204)
+			} else {
+				http.Error(w, "connection changed", 409)
+			}
 			return
 		}
-		if current.Operation != update.Previous || current.Operation == update.Operation || current.Sequence != update.Sequence {
+		if current.Operation != update.Previous || current.Sequence != update.Sequence {
 			http.Error(w, "connection changed", 409)
 			return
 		}
-		backend := i.Selections[0]
-		c := oauthConnection{Name: id, Generation: i.Generation, Backend: backend.Name, Revision: backend.Revision, Operation: update.Operation, Digest: digest, Sequence: update.Sequence + 1}
+		c := oauthConnection{Name: id, Generation: i.Generation, Backend: backend.Name, Revision: backend.Revision, Operation: update.Operation, Previous: update.Previous, Sequence: update.Sequence + 1}
 		if update.Action == "connect" {
-			access, err := update.Decrypt(d.updates.PrivateKey, i.ID, d.backends[backend.Name].endpoint)
+			access := update.Access
 			now := time.Now()
-			if err != nil || !validToken(access.Token) || !access.Expires.After(now) || access.Expires.After(now.Add(24*time.Hour)) {
-				http.Error(w, "invalid OAuth connection envelope", 400)
+			if !validToken(access.Token) || !access.Expires.After(now) || access.Expires.After(now.Add(24*time.Hour)) {
+				http.Error(w, "invalid OAuth access token or expiry", 400)
 				return
 			}
 			c.Sealed, err = d.seal(connectionPurpose(c), upstreamSecret{Token: access.Token, Expires: access.Expires, Epoch: update.Operation})
@@ -95,4 +98,16 @@ func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	http.Error(w, "connection update unavailable; retry the same operation", 503)
+}
+
+func (d *teamDashboard) sameConnectionUpdate(c oauthConnection, update mcpconfig.OAuthUpdate, backend mcpconfig.BackendSelection) bool {
+	if c.Backend != backend.Name || c.Revision != backend.Revision || c.Previous != update.Previous || c.Sequence != update.Sequence+1 {
+		return false
+	}
+	if update.Action == "disconnect" {
+		return c.Sealed == ""
+	}
+	var stored upstreamSecret
+	return d.open(connectionPurpose(c), c.Sealed, &stored) && stored.Epoch == update.Operation &&
+		stored.Token == update.Access.Token && stored.Expires.Equal(update.Access.Expires)
 }

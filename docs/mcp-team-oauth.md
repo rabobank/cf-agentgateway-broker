@@ -6,25 +6,25 @@
    plugin uses authorization code with S256 PKCE and a loopback redirect of
    `http://127.0.0.1:<port>/callback`. Set a fixed `callback_port` if the provider
    requires it. The client must be able to exchange the code without a secret.
-2. Set `mcp.oauth_updates.private_key` to a 32-byte hex X25519 private key and
-   `mcp.oauth_updates.encryption_key` to a separate random 32-byte hex storage
-   key in `gateway.yml`. Share both across gateway replicas. Configure a backend
+2. Set `mcp.oauth_updates.encryption_key` to a random 32-byte hex storage
+   key in `gateway.yml`. Share it across gateway replicas. Configure a backend
    with one HTTPS MCP target and a nonempty `team_oauth.allowed_tools` list.
-3. Configure `team_oauth.binding_key` in `broker.yml` and add a single-backend MCP
+3. Configure `team_oauth.binding_key` in `broker.yml` and share it across
+   broker replicas. Add a single-backend MCP
    plan with `oauth_profile`: `version: 1`, `resource` (the exact MCP URL),
-   `issuer`, `client_id`, `scopes`, the matching X25519 `public_key` (hex raw
-   bytes), and optional `callback_port`. Use a separate binding key across all
-   replicas of the same broker installation. Refresh the CF broker catalog
-   after changing public profile metadata.
+   `issuer`, `client_id`, `scopes`, and optional `callback_port`. After changing
+   profile metadata, run `cf update-service-broker` to refresh CAPI's catalog.
 4. Install `dist/cf-agentgateway` from the build. After targeting the desired
    space, run `cf ag list`, `cf ag connect INSTANCE`, `cf ag status INSTANCE`,
    or `cf ag disconnect INSTANCE`. To replace a working token, use `cf ag
    connect INSTANCE --replace`. `agentgateway` is the unabbreviated command.
 
-The CLI uses `cf curl` against the current CAPI target to read the plan metadata
-and submit the update. The upstream access token is encrypted to the gateway
-with HPKE before it enters CAPI. The broker translates OSB updates over its
-restricted management route; only the gateway decrypts and stores credentials.
+The CLI uses `cf curl` to read plan metadata and status. It sends the token in
+the service-instance update body over HTTPS using the current CF login. CAPI
+and the broker handle the token as a secret request parameter. The broker
+forwards it over the restricted management route; only the gateway persists it,
+encrypted at rest. The CLI does not pass the update body through `cf curl` or
+`CF_TRACE`.
 The instance generation and connection sequence fence stale updates. The
 latest identical operation is safe to retry. Status contains no credentials.
 There is no refresh-token exchange: reauthorize when the access token expires.

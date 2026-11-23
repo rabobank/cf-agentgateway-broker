@@ -6,20 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 )
 
 func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params map[string]string) (*mcpconfig.Backend, []mcpconfig.BackendSelection, error) {
 	var response struct {
 		Resources []struct {
 			Value struct {
-				Name           string               `json:"name"`
-				Revision       string               `json:"revision"`
-				CallerAuth     mcpconfig.CallerAuth `json:"callerAuth"`
-				TeamOAuth      bool                 `json:"teamOAuth"`
-				OAuthResource  string               `json:"oauthResource"`
-				OAuthPublicKey string               `json:"oauthPublicKey"`
-				Targets        []map[string]any     `json:"targets"`
+				Name          string               `json:"name"`
+				Revision      string               `json:"revision"`
+				CallerAuth    mcpconfig.CallerAuth `json:"callerAuth"`
+				TeamOAuth     bool                 `json:"teamOAuth"`
+				OAuthResource string               `json:"oauthResource"`
+				Targets       []map[string]any     `json:"targets"`
 			} `json:"value"`
 		} `json:"resources"`
 	}
@@ -45,7 +43,7 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 					return nil, nil, errors.New("team OAuth requires one backend, one target and no identity parameters")
 				}
 				current.Auth.Method = mcpconfig.TeamOAuthMethod
-				if v.OAuthResource != "" && (plan.OAuthProfile == nil || v.OAuthResource != plan.OAuthProfile.Resource || !strings.EqualFold(v.OAuthPublicKey, plan.OAuthProfile.PublicKey)) || v.OAuthResource == "" && plan.OAuthProfile != nil {
+				if v.OAuthResource != "" && (plan.OAuthProfile == nil || v.OAuthResource != plan.OAuthProfile.Resource) || v.OAuthResource == "" && plan.OAuthProfile != nil {
 					return nil, nil, errors.New("OAuth profile does not match the gateway backend")
 				}
 			} else {

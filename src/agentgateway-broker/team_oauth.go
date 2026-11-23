@@ -36,7 +36,7 @@ func (b *Broker) oauthManagement(ctx context.Context, method, instance string, b
 
 func (b *Broker) updateOAuth(w http.ResponseWriter, r *http.Request, instance *mcpconfig.Instance, req Request) {
 	_, plan := b.cfg.offering(instance.ServiceID, instance.PlanID)
-	if plan == nil || plan.OAuthProfile == nil || instance.Backend.Auth.Method != mcpconfig.TeamOAuthMethod {
+	if b.cfg.TeamOAuth == nil || plan == nil || plan.OAuthProfile == nil || instance.Backend.Auth.Method != mcpconfig.TeamOAuthMethod {
 		fail(w, 422, "instance updates are not supported")
 		return
 	}
@@ -48,6 +48,10 @@ func (b *Broker) updateOAuth(w http.ResponseWriter, r *http.Request, instance *m
 	}
 	if update.Generation != instance.Generation {
 		fail(w, 409, "service instance changed; rediscover the connection")
+		return
+	}
+	if update.Resource != plan.OAuthProfile.Resource {
+		fail(w, 409, "OAuth service plan changed; rediscover the connection")
 		return
 	}
 	err := b.oauthManagement(r.Context(), http.MethodPatch, managedID(b.cfg.Installation, instance.ID, ""), update, nil)

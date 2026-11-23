@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	mcpconfig "cf-mcp-config"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -124,7 +127,7 @@ func run(cf plugin.CliConnection, args []string) error {
 		if action == "connect" && status.Connected && !replace {
 			return errors.New("already connected; use --replace to authorize again")
 		}
-		update := mcpconfig.OAuthUpdate{Action: action, Generation: status.Generation, Previous: status.Operation, Sequence: status.Sequence, Operation: hex.EncodeToString(randomBytes(16))}
+		update := mcpconfig.OAuthUpdate{Resource: profile.Resource, Action: action, Generation: status.Generation, Previous: status.Operation, Sequence: status.Sequence, Operation: hex.EncodeToString(randomBytes(16))}
 		if action == "connect" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			access, err := login(ctx, profile)
@@ -132,12 +135,10 @@ func run(cf plugin.CliConnection, args []string) error {
 			if err != nil {
 				return err
 			}
-			if update.Encrypt(profile.PublicKey, i.GUID, profile.Resource, access) != nil {
-				return errors.New("cannot encrypt upstream authorization")
-			}
+			update.Access = &access
 		}
 		body, _ := json.Marshal(map[string]any{"parameters": map[string]any{mcpconfig.OAuthProfileField: update}})
-		if err := api(cf, path, nil, "-X", "PATCH", "-d", string(body)); err != nil {
+		if err := patchInstance(cf, path, body); err != nil {
 			return err
 		}
 		deadline := time.Now().Add(time.Minute)
@@ -161,6 +162,42 @@ func run(cf plugin.CliConnection, args []string) error {
 			}
 			time.Sleep(time.Second)
 		}
+	}
+	return nil
+}
+
+// Send secret-bearing updates directly so the token does not pass through
+// cf curl arguments, output, or CF_TRACE.
+func patchInstance(cf plugin.CliConnection, path string, body []byte) error {
+	target, err := cf.ApiEndpoint()
+	if err != nil {
+		return errors.New("cannot read the targeted CF API")
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") ||
+		(u.Scheme != "https" && !(u.Scheme == "http" && net.ParseIP(u.Hostname()).IsLoopback())) {
+		return errors.New("OAuth updates require a trusted HTTPS CF API or local loopback")
+	}
+	token, err := cf.AccessToken()
+	if err != nil || token == "" {
+		return errors.New("cannot read the CF access token; log in again")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	u.Path = path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return errors.New("cannot construct CF service instance update")
+	}
+	req.Header.Set("Authorization", token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := oauthHTTP.Do(req)
+	if err != nil {
+		return errors.New("Cloud Foundry instance update failed; check the target and your access")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Cloud Foundry instance update rejected (HTTP %d)", resp.StatusCode)
 	}
 	return nil
 }

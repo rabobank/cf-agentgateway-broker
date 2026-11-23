@@ -37,7 +37,7 @@ func TestTeamOAuthBindingAndUpstreamIsolation(t *testing.T) {
 	defer provider.Close()
 	var cfg mcpconfig.GatewayOperator
 	cfg.Capsules.LogID = "lab"
-	cfg.MCP.OAuthUpdates = &mcpconfig.OAuthUpdates{PrivateKey: strings.Repeat("34", 32), StorageKey: strings.Repeat("12", 32)}
+	cfg.MCP.OAuthUpdates = &mcpconfig.OAuthUpdates{StorageKey: strings.Repeat("12", 32)}
 	backend := mcpconfig.SharedBackend{Name: "test", Revision: "v1", TeamOAuth: &mcpconfig.TeamOAuth{AllowedTools: []string{"read_design"}}}
 	backend.MCP.Targets = []map[string]any{{"name": "design", "mcp": map[string]any{"host": provider.URL}}}
 	cfg.MCP.Backends = []mcpconfig.SharedBackend{backend}

@@ -39,7 +39,6 @@ type teamDashboard struct {
 	client   *http.Client
 	admin    string
 	backends map[string]oauthBackend
-	updates  *mcpconfig.OAuthUpdates
 }
 
 type oauthResource struct {
@@ -59,8 +58,8 @@ type oauthConnection struct {
 	Revision   string `json:"backendRevision"`
 	Sealed     string `json:"sealed,omitempty"`
 	Operation  string `json:"operation,omitempty"`
+	Previous   string `json:"previous,omitempty"`
 	Sequence   uint64 `json:"sequence,omitempty"`
-	Digest     string `json:"digest,omitempty"`
 }
 
 type upstreamSecret struct {
@@ -87,7 +86,7 @@ func newTeamDashboard(cfg mcpconfig.GatewayOperator) (*teamDashboard, error) {
 	}
 	d := &teamDashboard{logID: cfg.Capsules.LogID, aead: aead, admin: "http://127.0.0.1:15000",
 		client:   &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		backends: map[string]oauthBackend{}, updates: cfg.MCP.OAuthUpdates}
+		backends: map[string]oauthBackend{}}
 	if !mcpconfig.ValidID(d.logID) {
 		return nil, errors.New("team OAuth requires a valid installation log ID")
 	}

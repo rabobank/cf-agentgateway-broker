@@ -93,8 +93,13 @@ var _ = Describe("team MCP OAuth authorization code with PKCE", Label("cf-plugin
 		Expect(json.Unmarshal([]byte(connect), &explicitPlan)).To(Succeed())
 		explicitPlan["plan_id"] = "different-plan"
 		expectRequest(409, "PATCH", path, jsonString(explicitPlan), "", true)
-		Expect(connect).To(ContainSubstring(`"envelope":`))
-		Expect(connect).NotTo(ContainSubstring(fixtureOAuthAccessToken))
+		delete(explicitPlan, "plan_id")
+		update := explicitPlan["parameters"].(map[string]any)[mcpOAuthMetadata].(map[string]any)
+		update["access"].(map[string]any)["token"] = "different-token-for-the-same-operation"
+		expectRequest(409, "PATCH", path, jsonString(explicitPlan), "", true)
+		Expect(connect).To(ContainSubstring(fixtureOAuthAccessToken))
+		status := expectRequest(200, "GET", path, "", "", true)
+		Expect(string(status.body)).NotTo(ContainSubstring(fixtureOAuthAccessToken))
 		findSession := func() string {
 			var session string
 			Eventually(func() (int, error) {

@@ -1,14 +1,12 @@
 package acceptance_test
 
 import (
-	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -58,18 +56,15 @@ const fixtureOAuthScope = "mcp:connect"
 
 type oauthPKCEFixture struct {
 	server    *httptest.Server
-	key       *ecdh.PrivateKey
 	exchanges atomic.Int64
 	writes    atomic.Int64
 }
 
 func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 	GinkgoHelper()
-	key, err := ecdh.X25519().GenerateKey(rand.Reader)
-	Expect(err).NotTo(HaveOccurred())
 	tlsKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	Expect(err).NotTo(HaveOccurred())
-	f := &oauthPKCEFixture{key: key}
+	f := &oauthPKCEFixture{}
 	var mu sync.Mutex
 	codes := map[string]url.Values{}
 	mux := http.NewServeMux()
@@ -159,9 +154,9 @@ func fixtureTool(name string) any {
 }
 
 func (f *oauthPKCEFixture) gatewayConfig() map[string]any {
-	return map[string]any{"session_key": strings.Repeat("34", 32), "oauth_updates": map[string]string{"private_key": hex.EncodeToString(f.key.Bytes()), "encryption_key": strings.Repeat("56", 32)}, "backends": []any{map[string]any{"name": oauthFixtureName, "revision": "v1", "team_oauth": map[string]any{"allowed_tools": []string{"read_design"}}, "mcp": map[string]any{"targets": []any{map[string]any{"name": "tools", "mcp": map[string]string{"host": f.server.URL + "/mcp"}}}}}}}
+	return map[string]any{"session_key": strings.Repeat("34", 32), "oauth_updates": map[string]string{"encryption_key": strings.Repeat("56", 32)}, "backends": []any{map[string]any{"name": oauthFixtureName, "revision": "v1", "team_oauth": map[string]any{"allowed_tools": []string{"read_design"}}, "mcp": map[string]any{"targets": []any{map[string]any{"name": "tools", "mcp": map[string]string{"host": f.server.URL + "/mcp"}}}}}}}
 }
 
 func (f *oauthPKCEFixture) offering(port int) map[string]any {
-	return map[string]any{"id": "team-mcp", "name": "team-mcp", "description": "Team MCP", "protocol": "mcp", "connection": map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/mcp", port)}, "plans": []any{map[string]any{"id": oauthFixtureName, "name": oauthFixtureName, "description": "OAuth with PKCE", "access": map[string]any{"backends": []string{oauthFixtureName}}, "oauth_profile": map[string]any{"version": 1, "resource": f.server.URL + "/mcp", "issuer": f.server.URL, "client_id": oauthFixtureName, "scopes": []string{fixtureOAuthScope}, "public_key": hex.EncodeToString(f.key.PublicKey().Bytes())}}}}
+	return map[string]any{"id": "team-mcp", "name": "team-mcp", "description": "Team MCP", "protocol": "mcp", "connection": map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/mcp", port)}, "plans": []any{map[string]any{"id": oauthFixtureName, "name": oauthFixtureName, "description": "OAuth with PKCE", "access": map[string]any{"backends": []string{oauthFixtureName}}, "oauth_profile": map[string]any{"version": 1, "resource": f.server.URL + "/mcp", "issuer": f.server.URL, "client_id": oauthFixtureName, "scopes": []string{fixtureOAuthScope}}}}}
 }
