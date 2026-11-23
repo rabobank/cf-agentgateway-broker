@@ -65,20 +65,29 @@ func TestTeamOAuthBindingAndUpstreamIsolation(t *testing.T) {
 	var saved atomic.Value
 	saved.Store(connection(d, "first"))
 	var revoked atomic.Bool
+	var changedGeneration atomic.Bool
 	management := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var resources []any
+		generation := 1
 		appendResource := func(id string, value any) { resources = append(resources, map[string]any{"id": id, "value": value}) }
 		switch strings.TrimPrefix(r.URL.Path, "/api/config/resources/") {
-		case "mcp.instance":
+		case "mcp.instance/" + parent:
 			appendResource(parent, map[string]any{"metadata": i})
-		case "mcp.grant":
+		case "mcp.grant/" + grant:
 			if !revoked.Load() {
 				appendResource(grant, map[string]any{"instance": parent, "metadata": binding})
 			}
-		case oauthKind:
+		case oauthKind + "/" + parent:
 			appendResource(parent, saved.Load())
+			if changedGeneration.Load() {
+				generation++
+			}
+		default:
+			t.Errorf("unexpected management read: %s", r.URL.Path)
+			w.WriteHeader(404)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"resources": resources, "generation": 1})
+		_ = json.NewEncoder(w).Encode(map[string]any{"resources": resources, "generation": generation})
 	}))
 	defer management.Close()
 	d.admin, d.client.Transport = management.URL, provider.Client().Transport
@@ -96,6 +105,11 @@ func TestTeamOAuthBindingAndUpstreamIsolation(t *testing.T) {
 	if w := auth(strings.Repeat("f", 64)); w.Code != 403 {
 		t.Fatal("wrong agent credential accepted")
 	}
+	changedGeneration.Store(true)
+	if w := auth(consumer); w.Code != 403 {
+		t.Fatal("mixed management generations accepted")
+	}
+	changedGeneration.Store(false)
 	w := auth(consumer)
 	if w.Code != 200 || strings.Contains(w.Body.String(), access) || strings.Contains(w.Body.String(), consumer) {
 		t.Fatal("live binding authorization or secret isolation failed")
@@ -167,9 +181,9 @@ func TestDashboardImportRequiresLiveManagePermission(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/service_instances/instance/permissions":
 			_ = json.NewEncoder(w).Encode(map[string]bool{"manage": allowed.Load() && r.Header.Get("Authorization") == "Bearer cf-user"})
-		case "/api/config/resources/mcp.instance":
+		case "/api/config/resources/mcp.instance/" + id:
 			fmt.Fprintf(w, `{"generation":1,"resources":[{"id":%q,"value":{"metadata":{"installation":"lab","id":"instance","generation":"gen","backend":{"auth":{"method":"team_oauth"}},"backend_selections":[{"name":"test","revision":"v1"}]}}}]}`, id)
-		case "/api/config/resources/" + oauthKind:
+		case "/api/config/resources/" + oauthKind, "/api/config/resources/" + oauthKind + "/" + id:
 			if r.Method == http.MethodPut {
 				writes.Add(1)
 				var request struct {
@@ -316,7 +330,7 @@ func TestTeamOAuthNativeGateway(t *testing.T) {
 		}
 	})
 	client := &http.Client{Timeout: 4 * time.Second}
-	management := fmt.Sprintf("http://127.0.0.1:%d/api/config/resources/%s", admin, oauthKind)
+	management := fmt.Sprintf("http://127.0.0.1:%d/api/config/resources/%s/opaque", admin, oauthKind)
 	var snap oauthSnapshot
 	for deadline := time.Now().Add(8 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		resp, e := client.Get(management)
@@ -336,7 +350,7 @@ func TestTeamOAuthNativeGateway(t *testing.T) {
 	if !d.writeConnection(ctx, snap, resource) || d.writeConnection(ctx, snap, resource) {
 		t.Fatal("native conditional persistence accepted stale generation or rejected a current generation")
 	}
-	if current, err := d.snapshot(ctx, oauthKind); err != nil || !current.find("opaque", &resource) {
+	if current, err := d.snapshot(ctx, oauthKind, "opaque"); err != nil || !current.find("opaque", &resource) {
 		t.Fatal("native storage did not persist OAuth connection")
 	}
 	manage := func(kind string, value any) {

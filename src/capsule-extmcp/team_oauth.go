@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -182,9 +183,9 @@ func readJSON(r io.Reader, limit int64, out any) error {
 	return nil
 }
 
-func (d *teamDashboard) snapshot(ctx context.Context, kind string) (oauthSnapshot, error) {
+func (d *teamDashboard) snapshot(ctx context.Context, kind, id string) (oauthSnapshot, error) {
 	var out oauthSnapshot
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.admin+"/api/config/resources/"+kind, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.admin+"/api/config/resources/"+kind+"/"+url.PathEscape(id), nil)
 	if err != nil {
 		return out, err
 	}
@@ -262,7 +263,7 @@ func (d *teamDashboard) instance(ctx context.Context, id string) (mcpconfig.Inst
 
 func (d *teamDashboard) instanceAt(ctx context.Context, id string) (mcpconfig.Instance, *int64, bool) {
 	var value struct{ Metadata mcpconfig.Instance }
-	s, err := d.snapshot(ctx, "mcp.instance")
+	s, err := d.snapshot(ctx, "mcp.instance", id)
 	i := &value.Metadata
 	if err != nil || !s.find(id, &value) || i.Installation != d.logID || i.Revoked || i.Generation == "" ||
 		i.Backend.Auth.Method != mcpconfig.TeamOAuthMethod || len(i.Selections) != 1 || id != mcpconfig.ManagedID(d.logID, i.ID, "") ||
@@ -292,7 +293,7 @@ func (d *teamDashboard) grant(ctx context.Context, instance, binding, target, he
 		return denied, upstreamSecret{}, false
 	}
 	parent := mcpconfig.ManagedID(d.logID, instance, "")
-	s, err := d.snapshot(ctx, "mcp.grant")
+	s, err := d.snapshot(ctx, "mcp.grant", mcpconfig.ManagedID(d.logID, instance, binding))
 	var g struct {
 		Instance string
 		Metadata mcpconfig.Binding
@@ -310,7 +311,7 @@ func (d *teamDashboard) grant(ctx context.Context, instance, binding, target, he
 	if !ok || i.Generation != b.Instance.Generation {
 		return denied, upstreamSecret{}, false
 	}
-	connections, err := d.snapshot(ctx, oauthKind)
+	connections, err := d.snapshot(ctx, oauthKind, parent)
 	if err != nil || gen == nil || s.Generation == nil || connections.Generation == nil || *gen != *s.Generation || *gen != *connections.Generation {
 		return denied, upstreamSecret{}, false
 	}

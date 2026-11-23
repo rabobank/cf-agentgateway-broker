@@ -19,7 +19,7 @@ func (d *teamDashboard) connectionStatus(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "connection unavailable", 404)
 		return
 	}
-	s, err := d.snapshot(ctx, oauthKind)
+	s, err := d.snapshot(ctx, oauthKind, id)
 	if err != nil {
 		http.Error(w, "connection unavailable", 503)
 		return
@@ -54,7 +54,7 @@ func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request)
 	// Each retry uses a fresh snapshot; the operation predecessor fences stale
 	// requests, while the generation precondition fences concurrent lifecycle changes.
 	for range 3 {
-		s, err := d.snapshot(ctx, oauthKind)
+		s, err := d.snapshot(ctx, oauthKind, id)
 		if err != nil {
 			break
 		}

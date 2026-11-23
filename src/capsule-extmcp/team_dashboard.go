@@ -173,7 +173,7 @@ func (d *teamDashboard) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "instance access denied", 403)
 		return
 	}
-	s, err := d.snapshot(ctx, oauthKind)
+	s, err := d.snapshot(ctx, oauthKind, id)
 	if err != nil {
 		http.Error(w, "connection status unavailable", 503)
 		return
@@ -199,12 +199,12 @@ func (d *teamDashboard) changeConnection(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 	// Read the generation before checking the parent. A concurrent OSB delete
 	// or another dashboard write invalidates our conditional write.
-	s, err := d.snapshot(ctx, oauthKind)
+	id := r.PathValue("instance")
+	s, err := d.snapshot(ctx, oauthKind, id)
 	if err != nil {
 		http.Error(w, "connection unavailable", 503)
 		return
 	}
-	id := r.PathValue("instance")
 	i, ok := d.instance(ctx, id)
 	if !ok || !d.canManage(ctx, i.ID, u.Token) {
 		http.Error(w, "instance access denied", 403)
