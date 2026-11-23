@@ -88,6 +88,11 @@ var _ = Describe("team MCP OAuth authorization code with PKCE", Label("cf-plugin
 		Expect(cli("ag", "connect", "team-design")).To(ContainSubstring("team-design: connected"))
 		Expect(e.oauthMCP.exchanges.Load()).To(Equal(int64(1)))
 		connect := stub.patch()
+		Expect(connect).NotTo(ContainSubstring(`"plan_id"`))
+		var explicitPlan map[string]any
+		Expect(json.Unmarshal([]byte(connect), &explicitPlan)).To(Succeed())
+		explicitPlan["plan_id"] = "different-plan"
+		expectRequest(409, "PATCH", path, jsonString(explicitPlan), "", true)
 		Expect(connect).To(ContainSubstring(`"envelope":`))
 		Expect(connect).NotTo(ContainSubstring(fixtureOAuthAccessToken))
 		findSession := func() string {

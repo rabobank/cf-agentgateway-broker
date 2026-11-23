@@ -125,6 +125,30 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 		req.ServiceID = r.URL.Query().Get("service_id")
 		req.PlanID = r.URL.Query().Get("plan_id")
 	}
+	if r.Method == http.MethodPatch {
+		if len(parts) != 3 {
+			fail(w, 404, "not found")
+			return true
+		}
+		if len(b.cfg.MCPServers) == 0 && len(b.cfg.Services) == 0 {
+			return false
+		}
+		instance, err := b.instance(r.Context(), parts[2])
+		if err != nil {
+			fail(w, 503, "cannot recover managed instance")
+			return true
+		}
+		if instance == nil {
+			fail(w, 404, "instance not found")
+			return true
+		}
+		if instance.ServiceID != req.ServiceID || (req.PlanID != "" && instance.PlanID != req.PlanID) {
+			fail(w, 409, "instance service or plan mismatch")
+			return true
+		}
+		b.updateOAuth(w, r, instance, req)
+		return true
+	}
 	backend := b.backend(req.PlanID)
 	offering, plan := b.cfg.offering(req.ServiceID, req.PlanID)
 	shared := offering != nil && offering.Protocol == "mcp"
@@ -152,14 +176,6 @@ func (b *Broker) serveMCP(w http.ResponseWriter, r *http.Request, parts []string
 	}
 	if instance != nil && (instance.PlanID != req.PlanID || instance.ServiceID != req.ServiceID) {
 		fail(w, 409, "instance service or plan mismatch")
-		return true
-	}
-	if r.Method == http.MethodPatch {
-		if len(parts) != 3 || instance == nil {
-			fail(w, 404, "instance not found")
-			return true
-		}
-		b.updateOAuth(w, r, instance, req)
 		return true
 	}
 	if len(parts) == 3 {

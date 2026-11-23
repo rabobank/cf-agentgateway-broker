@@ -128,7 +128,7 @@ func (c *capiStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(400)
 			return
 		}
-		body, _ := json.Marshal(map[string]any{"service_id": "team-mcp", "plan_id": oauthFixtureName, "context": map[string]string{"platform": "cloudfoundry", "space_guid": stubSpace}, "parameters": obj.Parameters})
+		body, _ := json.Marshal(map[string]any{"service_id": "team-mcp", "context": map[string]string{"platform": "cloudfoundry", "space_guid": stubSpace}, "parameters": obj.Parameters})
 		c.lastPatch = body
 		if status := c.osb(r, "PATCH", "service_instances/team-instance?accepts_incomplete=true", body, nil); status != 200 {
 			stubJSON(w, 422, map[string]any{"errors": []any{map[string]any{"code": 10008, "title": "CF-UnprocessableEntity", "detail": fmt.Sprintf("Service broker rejected update (%d)", status)}}})
