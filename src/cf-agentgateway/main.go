@@ -20,8 +20,10 @@ import (
 
 type command struct{}
 
+const usage = "cf ag list | status INSTANCE | connect INSTANCE [--replace] [--paste] | disconnect INSTANCE"
+
 func (command) GetMetadata() plugin.PluginMetadata {
-	return plugin.PluginMetadata{Name: "agentgateway", Version: plugin.VersionType{Major: 1}, Commands: []plugin.Command{{Name: "agentgateway", Alias: "ag", HelpText: "Manage team MCP OAuth connections", UsageDetails: plugin.Usage{Usage: "cf ag list | status INSTANCE | connect INSTANCE [--replace] | disconnect INSTANCE"}}}}
+	return plugin.PluginMetadata{Name: "agentgateway", Version: plugin.VersionType{Major: 1}, Commands: []plugin.Command{{Name: "agentgateway", Alias: "ag", HelpText: "Manage team MCP OAuth connections", UsageDetails: plugin.Usage{Usage: usage}}}}
 }
 
 func (command) Run(cf plugin.CliConnection, args []string) {
@@ -58,13 +60,21 @@ func api(cf plugin.CliConnection, path string, out any, args ...string) error {
 
 func run(cf plugin.CliConnection, args []string) error {
 	if len(args) == 0 || args[0] == "help" {
-		fmt.Println("Usage: cf ag list | status INSTANCE | connect INSTANCE [--replace] | disconnect INSTANCE")
+		fmt.Println("Usage:", usage)
 		return nil
 	}
 	action := args[0]
-	replace := action == "connect" && len(args) == 3 && args[2] == "--replace"
-	if (action == "list" && len(args) != 1) || (action != "list" && len(args) != 2 && !replace) || (action != "list" && action != "status" && action != "connect" && action != "disconnect") {
-		return errors.New("usage: cf ag list | status INSTANCE | connect INSTANCE [--replace] | disconnect INSTANCE")
+	if (action == "list" && len(args) != 1) || (action != "list" && len(args) < 2) || (action != "list" && action != "status" && action != "connect" && action != "disconnect") {
+		return errors.New("usage: " + usage)
+	}
+	flags := map[string]bool{}
+	if len(args) > 2 {
+		for _, flag := range args[2:] {
+			if action != "connect" || (flag != "--replace" && flag != "--paste") || flags[flag] {
+				return errors.New("usage: " + usage)
+			}
+			flags[flag] = true
+		}
 	}
 	space, err := cf.GetCurrentSpace()
 	if err != nil || !mcpconfig.ValidID(space.Guid) {
@@ -125,13 +135,13 @@ func run(cf plugin.CliConnection, args []string) error {
 			printStatus(i.Name, status)
 			continue
 		}
-		if action == "connect" && status.Connected && !replace {
+		if action == "connect" && status.Connected && !flags["--replace"] {
 			return errors.New("already connected; use --replace to authorize again")
 		}
 		update := mcpconfig.OAuthUpdate{Resource: profile.Resource, Action: action, Generation: status.Generation, Previous: status.Operation, Sequence: status.Sequence, Operation: hex.EncodeToString(randomBytes(16))}
 		if action == "connect" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			access, err := login(ctx, profile)
+			access, err := login(ctx, profile, flags["--paste"])
 			cancel()
 			if err != nil {
 				return err

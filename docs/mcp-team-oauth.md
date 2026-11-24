@@ -2,22 +2,42 @@
 
 ## CLI setup
 
-1. Register an approved public OAuth client for the hosted MCP server. The CF
-   plugin uses authorization code with S256 PKCE and a loopback redirect of
+1. Use an approved OAuth client identity for the hosted MCP server. The CF
+   plugin supports a pre-registered public client ID or unauthenticated
+   [Dynamic Client Registration (RFC 7591)](https://www.rfc-editor.org/rfc/rfc7591.html).
+   It uses authorization code with S256 PKCE and a loopback redirect of
    `http://127.0.0.1:<port>/callback`. Set a fixed `callback_port` if the provider
-   requires it. The client must be able to exchange the code without a secret.
+   requires it. A pre-registered client must support code exchange without a secret.
 2. Set `mcp.oauth_updates.encryption_key` to a random 32-byte hex storage
    key in `gateway.yml`. Share it across gateway replicas. Configure a backend
    with one HTTPS MCP target and a nonempty `team_oauth.allowed_tools` list.
 3. Configure `team_oauth.binding_key` in `broker.yml` and share it across
    broker replicas. Add a single-backend MCP
    plan with `oauth_profile`: `version: 1`, `resource` (the exact MCP URL),
-   `issuer`, `client_id`, `scopes`, and optional `callback_port`. After changing
-   profile metadata, run `cf update-service-broker` to refresh CAPI's catalog.
+   `issuer`, `scopes`, and optional `callback_port`. Configure either `client_id`
+   for a pre-registered client, or `registration: {client_name: APPROVED_NAME}`
+   (with an optional HTTPS `client_uri`). In the latter case, the CLI discovers
+   the registration endpoint and registers its exact callback for each login.
+   If the provider restricts registration, use a name it has approved for this
+   integration. After changing profile metadata, run `cf update-service-broker`
+   to refresh CAPI's catalog.
 4. Install `dist/cf-agentgateway` from the build. After targeting the desired
    space, run `cf ag list`, `cf ag connect INSTANCE`, `cf ag status INSTANCE`,
    or `cf ag disconnect INSTANCE`. To replace a working token, use `cf ag
    connect INSTANCE --replace`. `agentgateway` is the unabbreviated command.
+
+If the browser is on a different machine from the CLI, use `cf ag connect
+INSTANCE --paste` (add `--replace` if needed). Open the printed URL, approve
+access, then copy the full loopback redirect URL from the browser address bar
+into the hidden terminal prompt. The browser may show a connection error: paste
+mode does not start a listener. It uses port 19876 unless `callback_port` is set.
+
+For dynamic registration, the CLI uses the returned token authentication method where it agrees with
+discovery and can be used with the returned credentials. It supports `none`,
+`client_secret_basic`, and `client_secret_post`. For example, if registration
+returns both a secret and a `none` hint but discovery advertises only Basic and
+POST authentication, the CLI uses Basic. The registration secret stays in CLI
+memory and is not sent to CAPI or stored.
 
 The CLI uses `cf curl` to read plan metadata and status. It sends the token in
 the service-instance update body over HTTPS using the current CF login. CAPI

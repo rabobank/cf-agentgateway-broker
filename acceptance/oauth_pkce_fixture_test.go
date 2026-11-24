@@ -53,39 +53,67 @@ func init() {
 const oauthFixtureName = "oauth-pkce-mcp"
 const fixtureOAuthAccessToken = "fixture-upstream-access-token"
 const fixtureOAuthScope = "mcp:connect"
+const fixtureClientSecret = "fixture-client-secret:+%"
 
 func fixtureAccessToken(exchange int64) string {
 	return fmt.Sprintf("%s-%d", fixtureOAuthAccessToken, exchange)
 }
 
 type oauthPKCEFixture struct {
-	server    *httptest.Server
-	exchanges atomic.Int64
-	writes    atomic.Int64
+	dynamic       bool
+	registrations atomic.Int64
+	server        *httptest.Server
+	exchanges     atomic.Int64
+	writes        atomic.Int64
 }
 
-func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
+func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
 	GinkgoHelper()
 	tlsKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	Expect(err).NotTo(HaveOccurred())
-	f := &oauthPKCEFixture{}
+	f := &oauthPKCEFixture{dynamic: dynamic}
 	var mu sync.Mutex
 	codes := map[string]url.Values{}
 	tokens := map[string]int64{}
 	sessions := map[string]int64{}
+	clients := map[string]string{}
 	var nextSession int
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth/resource-metadata", func(w http.ResponseWriter, r *http.Request) {
 		stubJSON(w, 200, map[string]any{"resource": f.server.URL + "/mcp", "authorization_servers": []string{f.server.URL}, "scopes_supported": []string{fixtureOAuthScope}})
 	})
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
-		stubJSON(w, 200, map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "code_challenge_methods_supported": []string{"S256"}, "authorization_response_iss_parameter_supported": true})
+		metadata := map[string]any{"issuer": f.server.URL, "authorization_endpoint": f.server.URL + "/authorize", "token_endpoint": f.server.URL + "/token", "code_challenge_methods_supported": []string{"S256"}, "authorization_response_iss_parameter_supported": true}
+		if dynamic {
+			metadata["registration_endpoint"] = f.server.URL + "/register"
+			metadata["token_endpoint_auth_methods_supported"] = []string{"client_secret_basic", "client_secret_post"}
+		}
+		stubJSON(w, 200, metadata)
+	})
+	mux.HandleFunc("POST /register", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name      string   `json:"client_name"`
+			Redirects []string `json:"redirect_uris"`
+			Method    string   `json:"token_endpoint_auth_method"`
+		}
+		if !dynamic || r.Header.Get("Authorization") != "" || json.NewDecoder(r.Body).Decode(&body) != nil || body.Name != oauthFixtureName || len(body.Redirects) != 1 || body.Method != "none" {
+			w.WriteHeader(400)
+			return
+		}
+		id := fmt.Sprintf("dynamic-client-%d", f.registrations.Add(1))
+		mu.Lock()
+		clients[id] = body.Redirects[0]
+		mu.Unlock()
+		stubJSON(w, 201, map[string]string{"client_id": id, "client_secret": fixtureClientSecret, "token_endpoint_auth_method": "none"})
 	})
 	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		mu.Lock()
+		clientOK := !dynamic && q.Get("client_id") == oauthFixtureName || dynamic && clients[q.Get("client_id")] == q.Get("redirect_uri")
+		mu.Unlock()
 		redirect, err := url.Parse(q.Get("redirect_uri"))
 		if err != nil || redirect.Scheme != "http" || redirect.Hostname() != "127.0.0.1" || redirect.Port() == "" || redirect.Path != "/callback" || redirect.User != nil || redirect.RawQuery != "" || redirect.Fragment != "" ||
-			q.Get("response_type") != "code" || q.Get("client_id") != oauthFixtureName || q.Get("scope") != fixtureOAuthScope || q.Get("resource") != f.server.URL+"/mcp" || q.Get("state") == "" || q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 {
+			q.Get("response_type") != "code" || !clientOK || q.Get("scope") != fixtureOAuthScope || q.Get("resource") != f.server.URL+"/mcp" || q.Get("state") == "" || q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 {
 			w.WriteHeader(400)
 			return
 		}
@@ -108,7 +136,12 @@ func startOAuthPKCEFixture(work string) *oauthPKCEFixture {
 		mu.Unlock()
 		verifier := r.PostForm.Get("code_verifier")
 		hash := sha256.Sum256([]byte(verifier))
-		if q == nil || r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("client_id") != q.Get("client_id") || r.PostForm.Get("redirect_uri") != q.Get("redirect_uri") || r.PostForm.Get("resource") != q.Get("resource") || base64.RawURLEncoding.EncodeToString(hash[:]) != q.Get("code_challenge") {
+		clientOK := r.PostForm.Get("client_id") == q.Get("client_id") && r.Header.Get("Authorization") == ""
+		if dynamic {
+			id, secret, ok := r.BasicAuth()
+			clientOK = ok && id == q.Get("client_id") && secret == url.QueryEscape(fixtureClientSecret) && !r.PostForm.Has("client_id") && !r.PostForm.Has("client_secret")
+		}
+		if q == nil || r.PostForm.Get("grant_type") != "authorization_code" || !clientOK || r.PostForm.Get("redirect_uri") != q.Get("redirect_uri") || r.PostForm.Get("resource") != q.Get("resource") || base64.RawURLEncoding.EncodeToString(hash[:]) != q.Get("code_challenge") {
 			stubJSON(w, 400, map[string]string{"error": "invalid_grant"})
 			return
 		}
@@ -184,5 +217,11 @@ func (f *oauthPKCEFixture) gatewayConfig() map[string]any {
 }
 
 func (f *oauthPKCEFixture) offering(port int) map[string]any {
-	return map[string]any{"id": "team-mcp", "name": "team-mcp", "description": "Team MCP", "protocol": "mcp", "connection": map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/mcp", port)}, "plans": []any{map[string]any{"id": oauthFixtureName, "name": oauthFixtureName, "description": "OAuth with PKCE", "access": map[string]any{"backends": []string{oauthFixtureName}}, "oauth_profile": map[string]any{"version": 1, "resource": f.server.URL + "/mcp", "issuer": f.server.URL, "client_id": oauthFixtureName, "scopes": []string{fixtureOAuthScope}}}}}
+	profile := map[string]any{"version": 1, "resource": f.server.URL + "/mcp", "issuer": f.server.URL, "scopes": []string{fixtureOAuthScope}}
+	if f.dynamic {
+		profile["registration"] = map[string]string{"client_name": oauthFixtureName}
+	} else {
+		profile["client_id"] = oauthFixtureName
+	}
+	return map[string]any{"id": "team-mcp", "name": "team-mcp", "description": "Team MCP", "protocol": "mcp", "connection": map[string]string{"url": fmt.Sprintf("http://127.0.0.1:%d/mcp", port)}, "plans": []any{map[string]any{"id": oauthFixtureName, "name": oauthFixtureName, "description": "OAuth with PKCE", "access": map[string]any{"backends": []string{oauthFixtureName}}, "oauth_profile": profile}}}
 }

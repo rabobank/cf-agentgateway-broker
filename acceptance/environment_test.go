@@ -58,10 +58,10 @@ func startSharedMCPEnvironment() *environment {
 }
 
 func startEnvironmentWithMCP(operator, shared bool) *environment {
-	return startEnvironmentWithFixtures(operator, shared, false)
+	return startEnvironmentWithFixtures(operator, shared, false, false)
 }
 
-func startEnvironmentWithFixtures(operator, shared, oauth bool) *environment {
+func startEnvironmentWithFixtures(operator, shared, oauth, dynamic bool) *environment {
 	GinkgoHelper()
 	root, err := filepath.Abs("..")
 	Expect(err).NotTo(HaveOccurred())
@@ -78,7 +78,7 @@ func startEnvironmentWithFixtures(operator, shared, oauth bool) *environment {
 		e.sharedMCP = startSharedMCPFixture(work)
 	}
 	if oauth {
-		e.oauthMCP = startOAuthPKCEFixture(work)
+		e.oauthMCP = startOAuthPKCEFixture(work, dynamic)
 	}
 	e.startPostgres()
 	e.startProvider()

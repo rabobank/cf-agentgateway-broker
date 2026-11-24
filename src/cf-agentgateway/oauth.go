@@ -14,11 +14,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 func randomBytes(n int) []byte { b := make([]byte, n); rand.Read(b); return b }
@@ -39,12 +42,16 @@ func oauthJSON(ctx context.Context, endpoint string, form url.Values, out any) e
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
+	return readOAuthJSON(req, http.StatusOK, out)
+}
+
+func readOAuthJSON(req *http.Request, status int, out any) error {
 	resp, err := oauthHTTP.Do(req)
 	if err != nil {
 		return errors.New("OAuth endpoint unreachable")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 128<<10)).Decode(out) != nil {
+	if resp.StatusCode != status || json.NewDecoder(io.LimitReader(resp.Body, 128<<10)).Decode(out) != nil {
 		return fmt.Errorf("OAuth endpoint rejected the request or returned invalid JSON (HTTP %d)", resp.StatusCode)
 	}
 	return nil
@@ -126,18 +133,31 @@ func discoverProtectedResource(ctx context.Context, p mcpconfig.OAuthProfile) er
 	return errors.New("MCP protected resource metadata is unavailable")
 }
 
-func login(ctx context.Context, p mcpconfig.OAuthProfile) (mcpconfig.OAuthAccess, error) {
+type authorizationServer struct {
+	Issuer       string   `json:"issuer"`
+	Auth         string   `json:"authorization_endpoint"`
+	Token        string   `json:"token_endpoint"`
+	Registration string   `json:"registration_endpoint"`
+	TokenMethods []string `json:"token_endpoint_auth_methods_supported"`
+	PKCE         []string `json:"code_challenge_methods_supported"`
+	IssRequired  bool     `json:"authorization_response_iss_parameter_supported"`
+}
+
+type oauthClient struct {
+	ID     string `json:"client_id"`
+	Secret string `json:"client_secret"`
+	Method string `json:"token_endpoint_auth_method"`
+}
+
+func login(ctx context.Context, p mcpconfig.OAuthProfile, paste bool) (mcpconfig.OAuthAccess, error) {
 	var none mcpconfig.OAuthAccess
+	if paste && !term.IsTerminal(int(os.Stdin.Fd())) {
+		return none, errors.New("--paste requires an interactive terminal for hidden input")
+	}
 	if err := discoverProtectedResource(ctx, p); err != nil {
 		return none, err
 	}
-	var as struct {
-		Issuer      string
-		Auth        string   `json:"authorization_endpoint"`
-		Token       string   `json:"token_endpoint"`
-		PKCE        []string `json:"code_challenge_methods_supported"`
-		IssRequired bool     `json:"authorization_response_iss_parameter_supported"`
-	}
+	var as authorizationServer
 	if err := oauthJSON(ctx, metadataURL(p.Issuer, "/.well-known/oauth-authorization-server"), nil, &as); err != nil {
 		return none, err
 	}
@@ -148,26 +168,114 @@ func login(ctx context.Context, p mcpconfig.OAuthProfile) (mcpconfig.OAuthAccess
 	if as.Issuer != p.Issuer || !mcpconfig.OAuthURL(as.Auth) || !mcpconfig.OAuthURL(as.Token) || !s256 {
 		return none, errors.New("unsupported authorization server metadata")
 	}
-	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", p.CallbackPort))
-	if err != nil {
-		return none, errors.New("cannot open the OAuth loopback callback")
+	port := p.CallbackPort
+	var listener net.Listener
+	if paste {
+		if port == 0 {
+			port = 19876
+		}
+	} else {
+		var err error
+		listener, err = net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return none, errors.New("cannot open the OAuth loopback callback")
+		}
+		defer listener.Close()
+		port = listener.Addr().(*net.TCPAddr).Port
 	}
-	redirect := "http://" + listener.Addr().String() + "/callback"
+	redirect := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	client := oauthClient{ID: p.ClientID, Method: "none"}
+	if p.Registration != nil {
+		var err error
+		client, err = registerClient(ctx, as.Registration, *p.Registration, redirect, strings.Join(p.Scopes, " "))
+		if err != nil {
+			return none, err
+		}
+	}
+	// A static profile explicitly configures a pre-registered public client.
+	method := "none"
+	if p.Registration != nil {
+		var err error
+		method, err = clientAuthMethod(client, as.TokenMethods)
+		if err != nil {
+			return none, err
+		}
+	}
 	enc := base64.RawURLEncoding.EncodeToString
 	state, verifier := enc(randomBytes(32)), enc(randomBytes(32))
 	hash := sha256.Sum256([]byte(verifier))
+	q := url.Values{"response_type": {"code"}, "client_id": {client.ID}, "redirect_uri": {redirect}, "scope": {strings.Join(p.Scopes, " ")}, "resource": {p.Resource}, "state": {state}, "code_challenge": {enc(hash[:])}, "code_challenge_method": {"S256"}}
+	authorize := as.Auth + "?" + q.Encode()
+	callback := oauthCallback{redirect: redirect, state: state, issuer: p.Issuer, requireIssuer: as.IssRequired}
+	var code string
+	var err error
+	if paste {
+		code, err = callback.paste(ctx, authorize)
+	} else {
+		code, err = callback.listen(ctx, listener, authorize)
+	}
+	if err != nil {
+		return none, err
+	}
+	if code == "" {
+		return none, errors.New("upstream authorization denied")
+	}
+	return exchangeCode(ctx, as.Token, client, method, p.Resource, redirect, verifier, code)
+}
+
+type oauthCallback struct {
+	redirect, state, issuer string
+	requireIssuer           bool
+}
+
+func (c oauthCallback) parse(address string) (string, bool) {
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", false
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	u.RawQuery, u.ForceQuery = "", false
+	if err != nil || u.String() != c.redirect || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(c.state)) != 1 {
+		return "", false
+	}
+	if (c.requireIssuer || q.Has("iss")) && (len(q["iss"]) != 1 || q.Get("iss") != c.issuer) {
+		return "", false
+	}
+	if len(q["error"]) == 1 && q.Get("error") != "" && !q.Has("code") {
+		return "", true
+	}
+	return q.Get("code"), !q.Has("error") && len(q["code"]) == 1 && q.Get("code") != ""
+}
+
+func (c oauthCallback) paste(ctx context.Context, authorize string) (string, error) {
+	fmt.Printf("Open this authorization URL in your browser:\n%s\n", authorize)
+	for ctx.Err() == nil {
+		fmt.Fprint(os.Stderr, "Paste the full callback URL (input hidden): ")
+		line, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", errors.New("could not read the OAuth callback from the terminal")
+		}
+		if ctx.Err() == nil {
+			if code, ok := c.parse(strings.TrimSpace(string(line))); ok {
+				return code, nil
+			}
+			fmt.Fprintln(os.Stderr, "Invalid OAuth callback; paste the redirect from this login.")
+		}
+	}
+	return "", errors.New("OAuth login timed out")
+}
+
+func (c oauthCallback) listen(ctx context.Context, listener net.Listener, authorize string) (string, error) {
 	result := make(chan string, 1)
+	expected, _ := url.Parse(c.redirect)
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		q := r.URL.Query()
-		if r.Method != "GET" || r.URL.Path != "/callback" || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 || (as.IssRequired || q.Get("iss") != "") && q.Get("iss") != p.Issuer {
+		code, valid := c.parse("http://" + r.Host + r.URL.RequestURI())
+		if r.Method != "GET" || r.Host != expected.Host || !valid {
 			http.Error(w, "Invalid OAuth callback", 400)
 			return
-		}
-		code := q.Get("code")
-		if q.Get("error") != "" || len(q["code"]) != 1 {
-			code = ""
 		}
 		fmt.Fprintln(w, "Authorization response received. Return to the terminal.")
 		select {
@@ -177,23 +285,38 @@ func login(ctx context.Context, p mcpconfig.OAuthProfile) (mcpconfig.OAuthAccess
 	})}
 	defer server.Close()
 	go server.Serve(listener)
-	q := url.Values{"response_type": {"code"}, "client_id": {p.ClientID}, "redirect_uri": {redirect}, "scope": {strings.Join(p.Scopes, " ")}, "resource": {p.Resource}, "state": {state}, "code_challenge": {enc(hash[:])}, "code_challenge_method": {"S256"}}
-	openBrowser(ctx, as.Auth+"?"+q.Encode())
-	var code string
+	openBrowser(ctx, authorize)
 	select {
-	case code = <-result:
+	case code := <-result:
+		return code, nil
 	case <-ctx.Done():
-		return none, errors.New("OAuth login timed out")
+		return "", errors.New("OAuth login timed out")
 	}
-	if code == "" {
-		return none, errors.New("upstream authorization denied")
+}
+
+func exchangeCode(ctx context.Context, endpoint string, client oauthClient, method, resource, redirect, verifier, code string) (mcpconfig.OAuthAccess, error) {
+	var none mcpconfig.OAuthAccess
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "resource": {resource}, "code_verifier": {verifier}}
+	if method != "client_secret_basic" {
+		form.Set("client_id", client.ID)
+	}
+	if method == "client_secret_post" {
+		form.Set("client_secret", client.Secret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return none, errors.New("invalid OAuth token endpoint")
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if method == "client_secret_basic" {
+		req.SetBasicAuth(url.QueryEscape(client.ID), url.QueryEscape(client.Secret))
 	}
 	var token struct {
 		Access string `json:"access_token"`
 		Type   string `json:"token_type"`
 		Expiry int    `json:"expires_in"`
 	}
-	if err := oauthJSON(ctx, as.Token, url.Values{"grant_type": {"authorization_code"}, "client_id": {p.ClientID}, "code": {code}, "redirect_uri": {redirect}, "resource": {p.Resource}, "code_verifier": {verifier}}, &token); err != nil {
+	if err := readOAuthJSON(req, http.StatusOK, &token); err != nil {
 		return none, err
 	}
 	if token.Access == "" || len(token.Access) > 8192 || !strings.EqualFold(token.Type, "bearer") || token.Expiry <= 0 || token.Expiry > 86400 {

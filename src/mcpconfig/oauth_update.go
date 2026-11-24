@@ -10,17 +10,27 @@ import (
 const OAuthProfileField = "agentgateway_mcp_oauth"
 
 type OAuthProfile struct {
-	Version      int      `json:"version"`
-	Resource     string   `json:"resource"`
-	Issuer       string   `json:"issuer"`
-	ClientID     string   `json:"client_id"`
-	Scopes       []string `json:"scopes"`
-	CallbackPort int      `json:"callback_port,omitempty"`
+	Version      int                `json:"version"`
+	Resource     string             `json:"resource"`
+	Issuer       string             `json:"issuer"`
+	ClientID     string             `json:"client_id,omitempty"`
+	Registration *OAuthRegistration `json:"registration,omitempty"`
+	Scopes       []string           `json:"scopes"`
+	CallbackPort int                `json:"callback_port,omitempty"`
+}
+
+// OAuthRegistration opts the CLI into RFC 7591 dynamic registration.
+type OAuthRegistration struct {
+	ClientName string `json:"client_name"`
+	ClientURI  string `json:"client_uri,omitempty"`
 }
 
 func (p OAuthProfile) Validate() error {
-	if p.Version != 1 || !OAuthURL(p.Resource) || !OAuthURL(p.Issuer) || p.ClientID == "" || len(p.Scopes) == 0 || p.CallbackPort < 0 || p.CallbackPort > 65535 {
+	if p.Version != 1 || !OAuthURL(p.Resource) || !OAuthURL(p.Issuer) || len(p.Scopes) == 0 || p.CallbackPort < 0 || p.CallbackPort > 65535 || (p.ClientID != "") == (p.Registration != nil) {
 		return errors.New("invalid team OAuth profile")
+	}
+	if r := p.Registration; r != nil && (strings.TrimSpace(r.ClientName) == "" || (r.ClientURI != "" && !OAuthURL(r.ClientURI))) {
+		return errors.New("dynamic OAuth registration requires a client name and an HTTPS client URI if supplied")
 	}
 	for _, scope := range p.Scopes {
 		if scope == "" || strings.ContainsAny(scope, " \r\n\t") {
