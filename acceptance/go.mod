@@ -3,6 +3,7 @@ module cf-agentgateway-broker-acceptance
 go 1.26.0
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/gin-gonic/gin v1.10.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0

@@ -3,6 +3,8 @@ package main
 import (
 	mcpconfig "cf-mcp-config"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -28,8 +30,9 @@ func (d *teamDashboard) connectionStatus(w http.ResponseWriter, r *http.Request)
 		status.Operation = c.Operation
 		status.Sequence = c.Sequence
 	}
-	if access, ok := d.usable(s, id, i); ok {
-		status.Connected = true
+	if c, access, ok := d.connection(s, id, i); ok {
+		status.Refreshable = d.canRefresh(c, access)
+		status.Connected = access.Expires.After(time.Now()) || status.Refreshable
 		status.Expires = &access.Expires
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -39,7 +42,7 @@ func (d *teamDashboard) connectionStatus(w http.ResponseWriter, r *http.Request)
 
 func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request) {
 	var update mcpconfig.OAuthUpdate
-	if readJSON(http.MaxBytesReader(w, r.Body, 24<<10), 24<<10, &update) != nil || update.Validate() != nil {
+	if readJSON(http.MaxBytesReader(w, r.Body, 128<<10), 128<<10, &update) != nil || update.Validate() != nil {
 		http.Error(w, "invalid OAuth update", 400)
 		return
 	}
@@ -87,13 +90,17 @@ func (d *teamDashboard) updateConnection(w http.ResponseWriter, r *http.Request)
 				http.Error(w, "invalid OAuth access token or expiry", 400)
 				return
 			}
+			if access.Refresh != nil && access.Refresh.Endpoint != d.backends[backend.Name].refreshEndpoint {
+				http.Error(w, "OAuth refresh endpoint is not enabled for this backend", 400)
+				return
+			}
 			// An operation ID is supplied by the caller and can be reused after
 			// intervening updates. Never use it to authorize session resumption.
 			epoch, err := nonce()
 			if err != nil {
 				break
 			}
-			c.Sealed, err = d.seal(connectionPurpose(c), upstreamSecret{Token: access.Token, Expires: access.Expires, Epoch: epoch})
+			c.Sealed, err = d.seal(connectionPurpose(c), upstreamSecret{Token: access.Token, Expires: access.Expires, Epoch: epoch, Refresh: access.Refresh, OriginalUpdate: accessDigest(access)})
 			if err != nil {
 				break
 			}
@@ -114,6 +121,17 @@ func (d *teamDashboard) sameConnectionUpdate(c oauthConnection, update mcpconfig
 		return c.Sealed == ""
 	}
 	var stored upstreamSecret
-	return d.open(connectionPurpose(c), c.Sealed, &stored) && stored.Epoch != "" &&
-		stored.Token == update.Access.Token && stored.Expires.Equal(update.Access.Expires)
+	if !d.open(connectionPurpose(c), c.Sealed, &stored) || stored.Epoch == "" {
+		return false
+	}
+	if stored.OriginalUpdate != "" {
+		return stored.OriginalUpdate == accessDigest(update.Access)
+	}
+	return update.Access.Refresh == nil && stored.Token == update.Access.Token && stored.Expires.Equal(update.Access.Expires)
+}
+
+func accessDigest(access *mcpconfig.OAuthAccess) string {
+	b, _ := json.Marshal(access)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

@@ -9,7 +9,8 @@ import (
 const TeamOAuthMethod = "team_oauth"
 
 type TeamOAuth struct {
-	AllowedTools []string `json:"allowed_tools"`
+	AllowedTools    []string `json:"allowed_tools"`
+	RefreshTokenURL string   `json:"refresh_token_url,omitempty"`
 }
 
 func OAuthURL(raw string) bool {
@@ -20,6 +21,9 @@ func OAuthURL(raw string) bool {
 var toolName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
 func (c TeamOAuth) Validate() error {
+	if c.RefreshTokenURL != "" && !OAuthURL(c.RefreshTokenURL) {
+		return errors.New("OAuth refresh token endpoint must be HTTPS")
+	}
 	if len(c.AllowedTools) == 0 {
 		return errors.New("team OAuth requires an explicit tool allowlist")
 	}

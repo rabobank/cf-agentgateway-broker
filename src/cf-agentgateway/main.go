@@ -4,6 +4,7 @@ import (
 	"bytes"
 	mcpconfig "cf-mcp-config"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,8 +21,10 @@ import (
 
 type command struct{}
 
+const usage = "cf ag list | status INSTANCE | connect INSTANCE [--replace] [--paste] | disconnect INSTANCE"
+
 func (command) GetMetadata() plugin.PluginMetadata {
-	return plugin.PluginMetadata{Name: "agentgateway", Version: plugin.VersionType{Major: 1}, Commands: []plugin.Command{{Name: "agentgateway", Alias: "ag", HelpText: "Manage team MCP OAuth connections", UsageDetails: plugin.Usage{Usage: "cf ag list | status INSTANCE | connect INSTANCE [--replace] | disconnect INSTANCE"}}}}
+	return plugin.PluginMetadata{Name: "agentgateway", Version: plugin.VersionType{Major: 1}, Commands: []plugin.Command{{Name: "agentgateway", Alias: "ag", HelpText: "Manage team MCP OAuth connections", UsageDetails: plugin.Usage{Usage: usage}}}}
 }
 
 func (command) Run(cf plugin.CliConnection, args []string) {
@@ -58,13 +61,21 @@ func api(cf plugin.CliConnection, path string, out any, args ...string) error {
 
 func run(cf plugin.CliConnection, args []string) error {
 	if len(args) == 0 || args[0] == "help" {
-		fmt.Println("Usage: cf ag list | status INSTANCE | connect INSTANCE [--replace] | disconnect INSTANCE")
+		fmt.Println("Usage:", usage)
 		return nil
 	}
 	action := args[0]
-	replace := action == "connect" && len(args) == 3 && args[2] == "--replace"
-	if (action == "list" && len(args) != 1) || (action != "list" && len(args) != 2 && !replace) || (action != "list" && action != "status" && action != "connect" && action != "disconnect") {
-		return errors.New("usage: cf ag list | status INSTANCE | connect INSTANCE [--replace] | disconnect INSTANCE")
+	if (action == "list" && len(args) != 1) || (action != "list" && len(args) < 2) || (action != "list" && action != "status" && action != "connect" && action != "disconnect") {
+		return errors.New("usage: " + usage)
+	}
+	flags := map[string]bool{}
+	if len(args) > 2 {
+		for _, flag := range args[2:] {
+			if action != "connect" || (flag != "--replace" && flag != "--paste") || flags[flag] {
+				return errors.New("usage: " + usage)
+			}
+			flags[flag] = true
+		}
 	}
 	space, err := cf.GetCurrentSpace()
 	if err != nil || !mcpconfig.ValidID(space.Guid) {
@@ -125,13 +136,13 @@ func run(cf plugin.CliConnection, args []string) error {
 			printStatus(i.Name, status)
 			continue
 		}
-		if action == "connect" && status.Connected && !replace {
+		if action == "connect" && status.Connected && !flags["--replace"] {
 			return errors.New("already connected; use --replace to authorize again")
 		}
 		update := mcpconfig.OAuthUpdate{Resource: profile.Resource, Action: action, Generation: status.Generation, Previous: status.Operation, Sequence: status.Sequence, Operation: hex.EncodeToString(randomBytes(16))}
 		if action == "connect" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			access, err := login(ctx, profile)
+			access, err := login(ctx, profile, flags["--paste"])
 			cancel()
 			if err != nil {
 				return err
@@ -192,8 +203,27 @@ func patchInstance(cf plugin.CliConnection, path string, body []byte) error {
 	}
 	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := oauthHTTP.Do(req)
+	client := *oauthHTTP
+	if u.Scheme == "https" {
+		skip, err := cf.IsSSLDisabled()
+		if err != nil {
+			return errors.New("cannot read the targeted CF API TLS settings")
+		}
+		if skip {
+			// Honor the user's explicit CF target setting only for this CAPI
+			// request. Do not change TLS verification for the OAuth provider.
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			defer transport.CloseIdleConnections()
+			client.Transport = transport
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		var verification *tls.CertificateVerificationError
+		if errors.As(err, &verification) {
+			return errors.New("Cloud Foundry instance update failed TLS verification; trust the CF API certificate authority")
+		}
 		return errors.New("Cloud Foundry instance update failed; check the target and your access")
 	}
 	defer resp.Body.Close()
@@ -216,6 +246,10 @@ func getStatus(cf plugin.CliConnection, path string) (mcpconfig.OAuthStatus, err
 }
 
 func printStatus(name string, s mcpconfig.OAuthStatus) {
+	if s.Connected && s.Refreshable && s.Expires != nil {
+		fmt.Printf("%s: connected (access token expires %s; automatic refresh enabled)\n", name, s.Expires.UTC().Format(time.RFC3339))
+		return
+	}
 	if s.Connected && s.Expires != nil {
 		fmt.Printf("%s: connected (expires %s)\n", name, s.Expires.UTC().Format(time.RFC3339))
 		return
