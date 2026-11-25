@@ -253,10 +253,17 @@ func (c oauthCallback) parse(address string) (string, bool) {
 func (c oauthCallback) paste(ctx context.Context, authorize string) (string, error) {
 	fmt.Printf("Open this authorization URL in your browser:\n%s\n", authorize)
 	for ctx.Err() == nil {
-		fmt.Fprint(os.Stderr, "Paste the full callback URL (input hidden): ")
-		line, err := term.ReadPassword(int(os.Stdin.Fd()))
+		line, err := readHiddenLine(ctx, os.Stdin, func() {
+			fmt.Fprint(os.Stderr, "Paste the full callback URL (input hidden): ")
+		})
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return "", errors.New("OAuth login timed out")
+			}
+			if errors.Is(err, context.Canceled) {
+				return "", errors.New("OAuth login cancelled")
+			}
 			return "", errors.New("could not read the OAuth callback from the terminal")
 		}
 		if ctx.Err() == nil {
