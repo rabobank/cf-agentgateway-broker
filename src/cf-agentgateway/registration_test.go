@@ -1,10 +1,42 @@
 package main
 
 import (
+	mcpconfig "cf-mcp-config"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 )
+
+func TestRegistrationResponseDefaultsToBasic(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Method string `json:"token_endpoint_auth_method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Method != "none" {
+			t.Error("expected registration to request public authentication")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"client_id":"fixture","client_secret":"fixture-secret"}`))
+	}))
+	defer s.Close()
+	previous := oauthHTTP
+	oauthHTTP = s.Client()
+	t.Cleanup(func() { oauthHTTP = previous })
+	as := authorizationServer{Registration: s.URL, TokenMethods: []string{"none", "client_secret_basic"}}
+	client, err := registerClient(t.Context(), as, mcpconfig.OAuthRegistration{ClientName: "fixture"}, "http://127.0.0.1:19876/callback", "read", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	method, err := clientAuthMethod(client, as.TokenMethods)
+	if err != nil || method != "client_secret_basic" {
+		t.Fatalf("expected the RFC 7591 default, got %q: %v", method, err)
+	}
+}
 
 func TestAccessLifetime(t *testing.T) {
 	if lifetime, err := accessLifetime(nil); err != nil || lifetime != 24*time.Hour {

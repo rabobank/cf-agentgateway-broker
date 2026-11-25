@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strings"
 )
 
 func registerClient(ctx context.Context, as authorizationServer, registration mcpconfig.OAuthRegistration, redirect, scope string, refresh bool) (oauthClient, error) {
@@ -44,8 +43,9 @@ func registerClient(ctx context.Context, as authorizationServer, registration mc
 	if !mcpconfig.ValidOAuthToken(client.ID) || (client.Secret != "" && !mcpconfig.ValidOAuthToken(client.Secret)) {
 		return oauthClient{}, errors.New("OAuth registration returned invalid client credentials")
 	}
-	if strings.TrimSpace(client.Method) == "" {
-		client.Method = method
+	if client.Method == "" {
+		// RFC 7591 §2: omission defaults to Basic, even if we requested none.
+		client.Method = "client_secret_basic"
 	}
 	return client, nil
 }
