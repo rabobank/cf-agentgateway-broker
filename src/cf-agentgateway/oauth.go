@@ -190,7 +190,7 @@ func login(ctx context.Context, p mcpconfig.OAuthProfile, paste bool) (mcpconfig
 	client := oauthClient{ID: p.ClientID, Method: "none"}
 	if p.Registration != nil {
 		var err error
-		client, err = registerClient(ctx, as.Registration, *p.Registration, redirect, strings.Join(p.Scopes, " "), p.RefreshTokenURL != "")
+		client, err = registerClient(ctx, as, *p.Registration, redirect, strings.Join(p.Scopes, " "), p.RefreshTokenURL != "")
 		if err != nil {
 			return none, err
 		}

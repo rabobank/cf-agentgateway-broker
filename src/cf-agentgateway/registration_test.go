@@ -25,6 +25,24 @@ func TestAccessLifetime(t *testing.T) {
 	}
 }
 
+func TestRegistrationAuthenticationSelection(t *testing.T) {
+	for _, tc := range []struct {
+		methods []string
+		want    string
+	}{
+		{[]string{"client_secret_basic", "none"}, "none"},
+		{[]string{"client_secret_post", "client_secret_basic"}, "client_secret_basic"},
+		{[]string{"client_secret_post"}, "client_secret_post"},
+		{nil, "client_secret_basic"},
+		{[]string{"private_key_jwt"}, ""},
+	} {
+		got, err := registrationAuthMethod(tc.methods)
+		if got != tc.want || (err != nil) != (tc.want == "") {
+			t.Errorf("methods %v: got %q, %v; want %q", tc.methods, got, err, tc.want)
+		}
+	}
+}
+
 func TestClientAuthenticationSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name, hint, secret, want string
@@ -35,6 +53,7 @@ func TestClientAuthenticationSelection(t *testing.T) {
 		{"public", "none", "", "none", []string{"none"}},
 		{"legacy static", "none", "", "none", nil},
 		{"missing secret", "client_secret_basic", "", "", []string{"client_secret_basic"}},
+		{"unsupported registration result", "private_key_jwt", "secret", "", []string{"client_secret_basic"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := clientAuthMethod(oauthClient{Secret: tc.secret, Method: tc.hint}, tc.advertised)

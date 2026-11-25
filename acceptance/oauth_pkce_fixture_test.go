@@ -104,7 +104,7 @@ func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
 			Redirects []string `json:"redirect_uris"`
 			Method    string   `json:"token_endpoint_auth_method"`
 		}
-		if !dynamic || r.Header.Get("Authorization") != "" || json.NewDecoder(r.Body).Decode(&body) != nil || body.Name != oauthFixtureName || len(body.Redirects) != 1 || body.Method != "none" {
+		if !dynamic || r.Header.Get("Authorization") != "" || json.NewDecoder(r.Body).Decode(&body) != nil || body.Name != oauthFixtureName || len(body.Redirects) != 1 || body.Method != "client_secret_basic" {
 			w.WriteHeader(400)
 			return
 		}
