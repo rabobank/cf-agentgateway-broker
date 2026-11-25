@@ -141,6 +141,18 @@ jobs:
           cd "$RUNNER_TEMP/release-bundles"
           sha256sum ./*.tar.gz > SHA256SUMS
 
+      - name: Package CF CLI plugin release assets
+        if: inputs.publish-build
+        run: |
+          assets="$RUNNER_TEMP/release-bundles"
+          cp cf/dist/cf-agentgateway "$assets/cf-agentgateway-linux-amd64"
+          for os in linux darwin; do
+            devbox run -- env GOTOOLCHAIN=go1.27.0 CGO_ENABLED=0 GOOS="$os" GOARCH=arm64 \
+              go -C src/cf-agentgateway build -trimpath -o "$assets/cf-agentgateway-$os-arm64" .
+          done
+          cd "$assets"
+          sha256sum cf-agentgateway-linux-amd64 cf-agentgateway-linux-arm64 cf-agentgateway-darwin-arm64 > cf-agentgateway-SHA256SUMS
+
       - name: Upload tested deployment bundle
         if: inputs.publish-build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
