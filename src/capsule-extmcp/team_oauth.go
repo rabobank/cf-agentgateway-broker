@@ -28,9 +28,10 @@ const oauthKind = "mcp.oauthConnection"
 const bindingHeader = "X-Agw-Mcp-Binding"
 
 type oauthBackend struct {
-	revision string
-	endpoint string
-	tools    map[string]bool
+	revision        string
+	endpoint        string
+	tools           map[string]bool
+	refreshEndpoint string
 }
 
 type teamDashboard struct {
@@ -52,20 +53,23 @@ type oauthSnapshot struct {
 }
 
 type oauthConnection struct {
-	Name       string `json:"name"`
-	Generation string `json:"instanceGeneration"`
-	Backend    string `json:"backend"`
-	Revision   string `json:"backendRevision"`
-	Sealed     string `json:"sealed,omitempty"`
-	Operation  string `json:"operation,omitempty"`
-	Previous   string `json:"previous,omitempty"`
-	Sequence   uint64 `json:"sequence,omitempty"`
+	Name           string `json:"name"`
+	Generation     string `json:"instanceGeneration"`
+	Backend        string `json:"backend"`
+	Revision       string `json:"backendRevision"`
+	Sealed         string `json:"sealed,omitempty"`
+	Operation      string `json:"operation,omitempty"`
+	Previous       string `json:"previous,omitempty"`
+	Sequence       uint64 `json:"sequence,omitempty"`
+	RefreshAttempt string `json:"refreshAttempt,omitempty"`
 }
 
 type upstreamSecret struct {
-	Token   string    `json:"token"`
-	Expires time.Time `json:"expires"`
-	Epoch   string    `json:"epoch"`
+	Token          string                  `json:"token"`
+	Expires        time.Time               `json:"expires"`
+	Epoch          string                  `json:"epoch"`
+	Refresh        *mcpconfig.OAuthRefresh `json:"refresh,omitempty"`
+	OriginalUpdate string                  `json:"originalUpdate,omitempty"`
 }
 
 func newTeamDashboard(cfg mcpconfig.GatewayOperator) (*teamDashboard, error) {
@@ -109,7 +113,7 @@ func newTeamDashboard(cfg mcpconfig.GatewayOperator) (*teamDashboard, error) {
 		for _, tool := range backend.TeamOAuth.AllowedTools {
 			tools[tool] = true
 		}
-		d.backends[backend.Name] = oauthBackend{backend.Revision, endpoint, tools}
+		d.backends[backend.Name] = oauthBackend{revision: backend.Revision, endpoint: endpoint, tools: tools, refreshEndpoint: backend.TeamOAuth.RefreshTokenURL}
 	}
 	return d, nil
 }
@@ -221,7 +225,7 @@ func (d *teamDashboard) seal(purpose string, value any) (string, error) {
 func (d *teamDashboard) open(purpose, sealed string, out any) bool {
 	raw, err := base64.RawURLEncoding.DecodeString(sealed)
 	n := d.aead.NonceSize()
-	if err != nil || len(raw) < n || len(raw) > 24<<10 {
+	if err != nil || len(raw) < n || len(raw) > 128<<10 {
 		return false
 	}
 	plain, err := d.aead.Open(nil, raw[:n], raw[n:], []byte(purpose))
@@ -255,17 +259,17 @@ func connectionPurpose(c oauthConnection) string {
 	return "upstream-token/v1/" + c.Name + "/" + c.Generation + "/" + c.Backend + "/" + c.Revision
 }
 
-func (d *teamDashboard) usable(s oauthSnapshot, id string, i mcpconfig.Instance) (upstreamSecret, bool) {
+func (d *teamDashboard) connection(s oauthSnapshot, id string, i mcpconfig.Instance) (oauthConnection, upstreamSecret, bool) {
 	var c oauthConnection
 	var token upstreamSecret
 	if !s.find(id, &c) || c.Name != id || c.Generation != i.Generation || c.Backend != i.Selections[0].Name || c.Revision != i.Selections[0].Revision ||
-		!d.open(connectionPurpose(c), c.Sealed, &token) || token.Epoch == "" || !token.Expires.After(time.Now()) || !validToken(token.Token) {
-		return upstreamSecret{}, false
+		!d.open(connectionPurpose(c), c.Sealed, &token) || token.Epoch == "" || !validToken(token.Token) {
+		return oauthConnection{}, upstreamSecret{}, false
 	}
-	return token, true
+	return c, token, true
 }
 
-func (d *teamDashboard) grant(ctx context.Context, instance, binding, target, header string) (mcpconfig.Binding, upstreamSecret, bool) {
+func (d *teamDashboard) grant(ctx context.Context, instance, binding, target, header string, refresh bool, rejectedToken string) (mcpconfig.Binding, upstreamSecret, bool) {
 	denied := mcpconfig.Binding{}
 	if !mcpconfig.ValidID(instance) || !mcpconfig.ValidID(binding) || !strings.HasPrefix(header, "Bearer ") || len(header) != 71 {
 		return denied, upstreamSecret{}, false
@@ -293,8 +297,17 @@ func (d *teamDashboard) grant(ctx context.Context, instance, binding, target, he
 	if err != nil || gen == nil || s.Generation == nil || connections.Generation == nil || *gen != *s.Generation || *gen != *connections.Generation {
 		return denied, upstreamSecret{}, false
 	}
-	secret, ok := d.usable(connections, parent, i)
-	return b, secret, ok
+	c, secret, ok := d.connection(connections, parent, i)
+	if !ok {
+		return denied, upstreamSecret{}, false
+	}
+	canRefresh := d.canRefresh(c, secret)
+	if refresh && canRefresh && (time.Until(secret.Expires) <= time.Minute || (rejectedToken != "" && secret.Token == rejectedToken)) {
+		d.refreshConnection(ctx, connections, c, secret)
+		// Recheck the live binding even if another replica won the exchange.
+		return d.grant(ctx, instance, binding, target, header, false, "")
+	}
+	return b, secret, secret.Expires.After(time.Now()) || (!refresh && canRefresh)
 }
 
 type bindingContext struct {
@@ -318,7 +331,7 @@ func (d *teamDashboard) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 1800*time.Millisecond)
 	defer cancel()
-	b, _, ok := d.grant(ctx, in.Instance, in.Binding, in.Target, singleHeader(r.Header, "Authorization"))
+	b, _, ok := d.grant(ctx, in.Instance, in.Binding, in.Target, singleHeader(r.Header, "Authorization"), false, "")
 	identities, err := b.TargetIdentities()
 	if !ok || err != nil {
 		http.Error(w, "binding denied", 403)
@@ -337,12 +350,16 @@ func (d *teamDashboard) upstream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "binding denied", 403)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	b, secret, ok := d.grant(ctx, binding.Instance, binding.Binding, binding.Target, singleHeader(r.Header, "Authorization"))
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	b, secret, ok := d.grant(ctx, binding.Instance, binding.Binding, binding.Target, singleHeader(r.Header, "Authorization"), true, "")
 	cancel()
 	backend := r.PathValue("backend")
 	if !ok || len(b.Instance.Selections) != 1 || b.Instance.Selections[0].Name != backend || b.Instance.Selections[0].Revision != d.backends[backend].revision {
 		http.Error(w, "binding denied", 403)
+		return
+	}
+	if !secret.Expires.After(time.Now()) {
+		http.Error(w, "upstream OAuth access expired", 403)
 		return
 	}
 	up := d.backends[backend]
@@ -398,6 +415,13 @@ func (d *teamDashboard) upstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized && secret.Refresh != nil {
+		// A provider can expire its token sooner than our local cutoff. Renew
+		// for the next request; never replay a tool call automatically.
+		refreshCtx, done := context.WithTimeout(r.Context(), 10*time.Second)
+		defer done()
+		d.grant(refreshCtx, binding.Instance, binding.Binding, binding.Target, singleHeader(r.Header, "Authorization"), true, secret.Token)
+	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		http.Error(w, "upstream redirects are unsupported", 502)
 		return

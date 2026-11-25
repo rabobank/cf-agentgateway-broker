@@ -4,6 +4,7 @@ import (
 	"bytes"
 	mcpconfig "cf-mcp-config"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -202,8 +203,27 @@ func patchInstance(cf plugin.CliConnection, path string, body []byte) error {
 	}
 	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := oauthHTTP.Do(req)
+	client := *oauthHTTP
+	if u.Scheme == "https" {
+		skip, err := cf.IsSSLDisabled()
+		if err != nil {
+			return errors.New("cannot read the targeted CF API TLS settings")
+		}
+		if skip {
+			// Honor the user's explicit CF target setting only for this CAPI
+			// request. Do not change TLS verification for the OAuth provider.
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			defer transport.CloseIdleConnections()
+			client.Transport = transport
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		var verification *tls.CertificateVerificationError
+		if errors.As(err, &verification) {
+			return errors.New("Cloud Foundry instance update failed TLS verification; trust the CF API certificate authority")
+		}
 		return errors.New("Cloud Foundry instance update failed; check the target and your access")
 	}
 	defer resp.Body.Close()
@@ -226,6 +246,10 @@ func getStatus(cf plugin.CliConnection, path string) (mcpconfig.OAuthStatus, err
 }
 
 func printStatus(name string, s mcpconfig.OAuthStatus) {
+	if s.Connected && s.Refreshable && s.Expires != nil {
+		fmt.Printf("%s: connected (access token expires %s; automatic refresh enabled)\n", name, s.Expires.UTC().Format(time.RFC3339))
+		return
+	}
 	if s.Connected && s.Expires != nil {
 		fmt.Printf("%s: connected (expires %s)\n", name, s.Expires.UTC().Format(time.RFC3339))
 		return

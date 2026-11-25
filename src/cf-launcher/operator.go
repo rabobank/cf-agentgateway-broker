@@ -143,6 +143,9 @@ func operatorGateway(raw []byte, port int) (map[string]any, error) {
 				definition["allowedTools"] = b.TeamOAuth.AllowedTools
 				if c.MCP.OAuthUpdates != nil {
 					definition["oauthResource"] = oauthResource
+					if b.TeamOAuth.RefreshTokenURL != "" {
+						definition["oauthRefreshEndpoint"] = b.TeamOAuth.RefreshTokenURL
+					}
 				}
 			}
 			definitions = append(definitions, definition)

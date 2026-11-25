@@ -57,6 +57,10 @@ func (b *Broker) updateOAuth(w http.ResponseWriter, r *http.Request, instance *m
 		fail(w, 409, "OAuth service plan changed; rediscover the connection")
 		return
 	}
+	if update.Access != nil && update.Access.Refresh != nil && update.Access.Refresh.Endpoint != plan.OAuthProfile.RefreshTokenURL {
+		fail(w, 400, "OAuth refresh endpoint is not enabled for this plan")
+		return
+	}
 	err := b.oauthManagement(r.Context(), http.MethodPatch, managedID(b.cfg.Installation, instance.ID, ""), update, nil)
 	if err != nil {
 		var api *apiError

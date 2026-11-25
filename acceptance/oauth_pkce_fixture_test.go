@@ -54,6 +54,7 @@ const oauthFixtureName = "oauth-pkce-mcp"
 const fixtureOAuthAccessToken = "fixture-upstream-access-token"
 const fixtureOAuthScope = "mcp:connect"
 const fixtureClientSecret = "fixture-client-secret:+%"
+const fixtureRefreshToken = "fixture-refresh-token"
 
 func fixtureAccessToken(exchange int64) string {
 	return fmt.Sprintf("%s-%d", fixtureOAuthAccessToken, exchange)
@@ -65,6 +66,8 @@ type oauthPKCEFixture struct {
 	server        *httptest.Server
 	exchanges     atomic.Int64
 	writes        atomic.Int64
+	refreshes     atomic.Int64
+	expireNext    atomic.Bool
 }
 
 func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
@@ -77,6 +80,11 @@ func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
 	tokens := map[string]int64{}
 	sessions := map[string]int64{}
 	clients := map[string]string{}
+	type refreshGrant struct {
+		client   string
+		exchange int64
+	}
+	refreshTokens := map[string]refreshGrant{}
 	var nextSession int
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth/resource-metadata", func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +137,24 @@ func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
 			w.WriteHeader(400)
 			return
 		}
+		if r.PostForm.Get("grant_type") == "refresh_token" {
+			id, secret, ok := r.BasicAuth()
+			mu.Lock()
+			defer mu.Unlock()
+			old := r.PostForm.Get("refresh_token")
+			grant, found := refreshTokens[old]
+			if !dynamic || !ok || !found || id != grant.client || secret != url.QueryEscape(fixtureClientSecret) {
+				stubJSON(w, 400, map[string]string{"error": "invalid_grant"})
+				return
+			}
+			delete(refreshTokens, old)
+			n := f.refreshes.Add(1)
+			next := fmt.Sprintf("%s-rotated-%d", fixtureRefreshToken, n)
+			access := fmt.Sprintf("%s-refreshed-%d", fixtureOAuthAccessToken, n)
+			refreshTokens[next], tokens["Bearer "+access] = grant, grant.exchange
+			stubJSON(w, 200, map[string]any{"access_token": access, "refresh_token": next, "expires_in": 3600})
+			return
+		}
 		mu.Lock()
 		code := r.PostForm.Get("code")
 		q := codes[code]
@@ -149,14 +175,25 @@ func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
 		exchange := f.exchanges.Add(1)
 		token := fixtureAccessToken(exchange)
 		tokens["Bearer "+token] = exchange
+		refresh := fmt.Sprintf("%s-%d", fixtureRefreshToken, exchange)
+		if dynamic {
+			refreshTokens[refresh] = refreshGrant{q.Get("client_id"), exchange}
+		}
 		mu.Unlock()
-		stubJSON(w, 200, map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 3600})
+		response := map[string]any{"access_token": token}
+		if !dynamic {
+			response["token_type"] = "Bearer"
+			response["expires_in"] = 3600
+		} else {
+			response["refresh_token"] = refresh
+		}
+		stubJSON(w, 200, response)
 	})
 	mux.HandleFunc("POST /mcp", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		exchange := tokens[r.Header.Get("Authorization")]
 		mu.Unlock()
-		if exchange == 0 {
+		if exchange == 0 || f.expireNext.Swap(false) {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.server.URL+`/oauth/resource-metadata", scope="`+fixtureOAuthScope+`"`)
 			w.WriteHeader(401)
 			return
@@ -196,7 +233,11 @@ func startOAuthPKCEFixture(work string, dynamic bool) *oauthPKCEFixture {
 			if msg.Params.Name == "write_design" {
 				f.writes.Add(1)
 			}
-			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": fmt.Sprintf("upstream-ok: authorization %d", exchange)}}}
+			text := fmt.Sprintf("upstream-ok: authorization %d", exchange)
+			if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "+fixtureOAuthAccessToken+"-refreshed-") {
+				text += "; refreshed access token"
+			}
+			result = map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}
 		default:
 			w.WriteHeader(400)
 			return
@@ -213,12 +254,17 @@ func fixtureTool(name string) any {
 }
 
 func (f *oauthPKCEFixture) gatewayConfig() map[string]any {
-	return map[string]any{"session_key": strings.Repeat("34", 32), "oauth_updates": map[string]string{"encryption_key": strings.Repeat("56", 32)}, "backends": []any{map[string]any{"name": oauthFixtureName, "revision": "v1", "team_oauth": map[string]any{"allowed_tools": []string{"read_design"}}, "mcp": map[string]any{"targets": []any{map[string]any{"name": "tools", "mcp": map[string]string{"host": f.server.URL + "/mcp"}}}}}}}
+	team := map[string]any{"allowed_tools": []string{"read_design"}}
+	if f.dynamic {
+		team["refresh_token_url"] = f.server.URL + "/token"
+	}
+	return map[string]any{"session_key": strings.Repeat("34", 32), "oauth_updates": map[string]string{"encryption_key": strings.Repeat("56", 32)}, "backends": []any{map[string]any{"name": oauthFixtureName, "revision": "v1", "team_oauth": team, "mcp": map[string]any{"targets": []any{map[string]any{"name": "tools", "mcp": map[string]string{"host": f.server.URL + "/mcp"}}}}}}}
 }
 
 func (f *oauthPKCEFixture) offering(port int) map[string]any {
 	profile := map[string]any{"version": 1, "resource": f.server.URL + "/mcp", "issuer": f.server.URL, "scopes": []string{fixtureOAuthScope}}
 	if f.dynamic {
+		profile["refresh_token_url"] = f.server.URL + "/token"
 		profile["registration"] = map[string]string{"client_name": oauthFixtureName}
 	} else {
 		profile["client_id"] = oauthFixtureName

@@ -168,6 +168,9 @@ func login(ctx context.Context, p mcpconfig.OAuthProfile, paste bool) (mcpconfig
 	if as.Issuer != p.Issuer || !mcpconfig.OAuthURL(as.Auth) || !mcpconfig.OAuthURL(as.Token) || !s256 {
 		return none, errors.New("unsupported authorization server metadata")
 	}
+	if p.RefreshTokenURL != "" && as.Token != p.RefreshTokenURL {
+		return none, errors.New("discovered token endpoint does not match the configured refresh endpoint")
+	}
 	port := p.CallbackPort
 	var listener net.Listener
 	if paste {
@@ -187,7 +190,7 @@ func login(ctx context.Context, p mcpconfig.OAuthProfile, paste bool) (mcpconfig
 	client := oauthClient{ID: p.ClientID, Method: "none"}
 	if p.Registration != nil {
 		var err error
-		client, err = registerClient(ctx, as.Registration, *p.Registration, redirect, strings.Join(p.Scopes, " "))
+		client, err = registerClient(ctx, as.Registration, *p.Registration, redirect, strings.Join(p.Scopes, " "), p.RefreshTokenURL != "")
 		if err != nil {
 			return none, err
 		}
@@ -220,7 +223,7 @@ func login(ctx context.Context, p mcpconfig.OAuthProfile, paste bool) (mcpconfig
 	if code == "" {
 		return none, errors.New("upstream authorization denied")
 	}
-	return exchangeCode(ctx, as.Token, client, method, p.Resource, redirect, verifier, code)
+	return exchangeCode(ctx, as.Token, client, method, p.Resource, redirect, verifier, code, p.RefreshTokenURL != "")
 }
 
 type oauthCallback struct {
@@ -294,35 +297,54 @@ func (c oauthCallback) listen(ctx context.Context, listener net.Listener, author
 	}
 }
 
-func exchangeCode(ctx context.Context, endpoint string, client oauthClient, method, resource, redirect, verifier, code string) (mcpconfig.OAuthAccess, error) {
+func exchangeCode(ctx context.Context, endpoint string, client oauthClient, method, resource, redirect, verifier, code string, refreshEnabled bool) (mcpconfig.OAuthAccess, error) {
 	var none mcpconfig.OAuthAccess
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "resource": {resource}, "code_verifier": {verifier}}
-	if method != "client_secret_basic" {
-		form.Set("client_id", client.ID)
-	}
-	if method == "client_secret_post" {
-		form.Set("client_secret", client.Secret)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return none, errors.New("invalid OAuth token endpoint")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if method == "client_secret_basic" {
-		req.SetBasicAuth(url.QueryEscape(client.ID), url.QueryEscape(client.Secret))
-	}
+	mcpconfig.ApplyOAuthClientAuth(req, form, method, client.ID, client.Secret)
+	encoded := form.Encode()
+	req.Body, req.ContentLength = io.NopCloser(strings.NewReader(encoded)), int64(len(encoded))
 	var token struct {
-		Access string `json:"access_token"`
-		Type   string `json:"token_type"`
-		Expiry int    `json:"expires_in"`
+		Access  string  `json:"access_token"`
+		Type    *string `json:"token_type"`
+		Expiry  *int64  `json:"expires_in"`
+		Refresh string  `json:"refresh_token"`
 	}
 	if err := readOAuthJSON(req, http.StatusOK, &token); err != nil {
 		return none, err
 	}
-	if token.Access == "" || len(token.Access) > 8192 || !strings.EqualFold(token.Type, "bearer") || token.Expiry <= 0 || token.Expiry > 86400 {
-		return none, errors.New("server did not return a usable short-lived bearer")
+	if token.Access == "" || len(token.Access) > 8192 || strings.ContainsFunc(token.Access, func(r rune) bool { return r < 33 || r > 126 }) {
+		return none, errors.New("OAuth token response has a missing or invalid access_token")
 	}
-	return mcpconfig.OAuthAccess{Token: token.Access, Expires: time.Now().UTC().Add(time.Duration(token.Expiry) * time.Second)}, nil
+	// Some MCP providers omit token_type. MCP uses the Bearer header; only
+	// default an omitted type, never a different explicitly declared type.
+	if token.Type != nil && !strings.EqualFold(*token.Type, "bearer") {
+		return none, errors.New("OAuth token response declares a non-Bearer token_type")
+	}
+	lifetime, err := accessLifetime(token.Expiry)
+	if err != nil {
+		return none, err
+	}
+	access := mcpconfig.OAuthAccess{Token: token.Access, Expires: time.Now().UTC().Add(lifetime)}
+	if refreshEnabled && token.Refresh != "" {
+		refresh := mcpconfig.OAuthRefresh{Token: token.Refresh, Endpoint: endpoint, ClientID: client.ID, Method: method}
+		if method != "none" {
+			refresh.ClientSecret = client.Secret
+		}
+		if !refresh.Valid() {
+			return none, errors.New("OAuth token response has unusable refresh credentials")
+		}
+		access.Refresh = &refresh
+	}
+	return access, nil
+}
+
+func accessLifetime(expiresIn *int64) (time.Duration, error) {
+	return mcpconfig.OAuthAccessLifetime(expiresIn)
 }
 
 func openBrowser(ctx context.Context, address string) {

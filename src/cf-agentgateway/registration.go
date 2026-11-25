@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-func registerClient(ctx context.Context, endpoint string, registration mcpconfig.OAuthRegistration, redirect, scope string) (oauthClient, error) {
+func registerClient(ctx context.Context, endpoint string, registration mcpconfig.OAuthRegistration, redirect, scope string, refresh bool) (oauthClient, error) {
 	var client oauthClient
 	if !mcpconfig.OAuthURL(endpoint) {
 		return client, errors.New("dynamic OAuth registration requires an HTTPS registration endpoint")
@@ -21,6 +21,9 @@ func registerClient(ctx context.Context, endpoint string, registration mcpconfig
 		"client_name": registration.ClientName, "application_type": "native",
 		"redirect_uris": []string{redirect}, "response_types": []string{"code"},
 		"grant_types": []string{"authorization_code"}, "token_endpoint_auth_method": "none", "scope": scope,
+	}
+	if refresh {
+		metadata["grant_types"] = []string{"authorization_code", "refresh_token"}
 	}
 	if registration.ClientURI != "" {
 		metadata["client_uri"] = registration.ClientURI

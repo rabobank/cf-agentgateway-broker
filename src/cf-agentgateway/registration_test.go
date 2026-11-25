@@ -3,7 +3,27 @@ package main
 import (
 	"net/url"
 	"testing"
+	"time"
 )
+
+func TestAccessLifetime(t *testing.T) {
+	if lifetime, err := accessLifetime(nil); err != nil || lifetime != 24*time.Hour {
+		t.Fatalf("omitted expiry: got %v, %v", lifetime, err)
+	}
+	for _, tc := range []struct {
+		seconds int64
+		want    time.Duration
+	}{
+		{3600, time.Hour},
+		{1<<63 - 1, 24 * time.Hour},
+		{0, 0},
+		{-1, 0},
+	} {
+		if lifetime, err := accessLifetime(&tc.seconds); lifetime != tc.want || (err != nil) != (tc.want == 0) {
+			t.Errorf("expires_in %d: got %v, %v; want %v", tc.seconds, lifetime, err, tc.want)
+		}
+	}
+}
 
 func TestClientAuthenticationSelection(t *testing.T) {
 	for _, tc := range []struct {

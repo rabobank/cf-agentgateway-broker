@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -9,6 +11,38 @@ import (
 	"code.cloudfoundry.org/cli/v8/plugin"
 	models "code.cloudfoundry.org/cli/v8/plugin/models"
 )
+
+type patchCLI struct {
+	plugin.CliConnection
+	endpoint string
+	skipTLS  bool
+}
+
+func (c patchCLI) ApiEndpoint() (string, error) { return c.endpoint, nil }
+func (c patchCLI) AccessToken() (string, error) { return "Bearer fixture", nil }
+func (c patchCLI) IsSSLDisabled() (bool, error) { return c.skipTLS, nil }
+
+func TestPatchHonorsCFTLSSettingWithoutChangingOAuthClient(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.Header.Get("Authorization") != "Bearer fixture" {
+			t.Error("expected an authenticated CAPI PATCH")
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer s.Close()
+	c := patchCLI{endpoint: s.URL}
+	if err := patchInstance(c, "/v3/service_instances/instance", []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "TLS verification") {
+		t.Fatalf("untrusted certificate should fail by default: %v", err)
+	}
+	c.skipTLS = true
+	if err := patchInstance(c, "/v3/service_instances/instance", []byte(`{}`)); err != nil {
+		t.Fatalf("explicit CF TLS setting should allow the update: %v", err)
+	}
+	if resp, err := oauthHTTP.Get(s.URL); err == nil {
+		resp.Body.Close()
+		t.Fatal("OAuth client stopped verifying certificates")
+	}
+}
 
 type instanceLookupCLI struct {
 	plugin.CliConnection

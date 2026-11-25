@@ -112,6 +112,8 @@ var _ = Describe("team MCP OAuth authorization code with PKCE", Label("cf-plugin
 			Expect(connect).To(ContainSubstring(fixtureAccessToken(1)))
 			status := expectRequest(200, "GET", path, "", "", true)
 			Expect(string(status.body)).NotTo(ContainSubstring(fixtureOAuthAccessToken))
+			Expect(string(status.body)).NotTo(ContainSubstring(fixtureRefreshToken))
+			Expect(string(status.body)).NotTo(ContainSubstring(fixtureClientSecret))
 			findSession := func() string {
 				var session string
 				Eventually(func() (int, error) {
@@ -145,6 +147,21 @@ var _ = Describe("team MCP OAuth authorization code with PKCE", Label("cf-plugin
 			code, _, body = call(session, "tools/call", tool)
 			Expect(code).To(Equal(200), body)
 			Expect(body).To(ContainSubstring("upstream-ok: authorization 1"))
+			if dynamic {
+				By("refreshing on upstream rejection without replaying tool calls, including after restart")
+				Expect(cli("ag", "status", "team-design")).To(ContainSubstring("automatic refresh enabled"))
+				for n := int64(1); n <= 2; n++ {
+					e.oauthMCP.expireNext.Store(true)
+					_, _, body = call(session, "tools/call", tool)
+					Expect(body).NotTo(ContainSubstring("upstream-ok"))
+					Expect(e.oauthMCP.refreshes.Load()).To(Equal(n))
+					expectRequest(200, "PATCH", path, connect, "", true)
+					code, _, body = call(session, "tools/call", tool)
+					Expect(code).To(Equal(200), body)
+					Expect(body).To(ContainSubstring("upstream-ok: authorization 1"))
+					Expect(body).To(ContainSubstring("refreshed access token"))
+				}
+			}
 			By("disconnecting and blocking old sessions and replayed connect updates")
 			Expect(cli("ag", "disconnect", "team-design")).To(ContainSubstring("team-design: not connected"))
 			expectRequest(409, "PATCH", path, connect, "", true)

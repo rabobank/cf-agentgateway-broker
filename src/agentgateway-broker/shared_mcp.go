@@ -12,12 +12,13 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 	var response struct {
 		Resources []struct {
 			Value struct {
-				Name          string               `json:"name"`
-				Revision      string               `json:"revision"`
-				CallerAuth    mcpconfig.CallerAuth `json:"callerAuth"`
-				TeamOAuth     bool                 `json:"teamOAuth"`
-				OAuthResource string               `json:"oauthResource"`
-				Targets       []map[string]any     `json:"targets"`
+				Name                 string               `json:"name"`
+				Revision             string               `json:"revision"`
+				CallerAuth           mcpconfig.CallerAuth `json:"callerAuth"`
+				TeamOAuth            bool                 `json:"teamOAuth"`
+				OAuthResource        string               `json:"oauthResource"`
+				OAuthRefreshEndpoint string               `json:"oauthRefreshEndpoint"`
+				Targets              []map[string]any     `json:"targets"`
 			} `json:"value"`
 		} `json:"resources"`
 	}
@@ -45,6 +46,9 @@ func (b *Broker) resolveShared(ctx context.Context, plan *OfferingPlan, params m
 				current.Auth.Method = mcpconfig.TeamOAuthMethod
 				if v.OAuthResource != "" && (plan.OAuthProfile == nil || v.OAuthResource != plan.OAuthProfile.Resource) || v.OAuthResource == "" && plan.OAuthProfile != nil {
 					return nil, nil, errors.New("OAuth profile does not match the gateway backend")
+				}
+				if plan.OAuthProfile != nil && v.OAuthRefreshEndpoint != plan.OAuthProfile.RefreshTokenURL {
+					return nil, nil, errors.New("OAuth refresh endpoint does not match the gateway backend")
 				}
 			} else {
 				if plan.OAuthProfile != nil {
